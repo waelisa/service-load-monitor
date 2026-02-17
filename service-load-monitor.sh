@@ -5,7 +5,7 @@
 # =============================================================================
 # Author:  Wael Isa
 # Version: 2.2.2
-# Date:    February 17, 2026
+# Date:    February 18, 2026
 # Website: https://www.wael.name
 # =============================================================================
 # Description: Enterprise-grade service monitoring with intelligent firewall
@@ -28,7 +28,7 @@ SCRIPT_NAME="Service Load Monitor"
 SCRIPT_VERSION="2.2.2"
 SCRIPT_AUTHOR="Wael Isa"
 SCRIPT_URL="https://www.wael.name"
-SCRIPT_DATE="February 17, 2026"
+SCRIPT_DATE="February 18, 2026"
 
 # Minimum required version for updates
 MIN_VERSION="1.0.0"
@@ -73,6 +73,223 @@ CLOUD_GCP="GCP"
 CLOUD_AZURE="Azure"
 CLOUD_ORACLE="Oracle Cloud"
 CLOUD_NONE="none"
+
+# =============================================================================
+# UI HELPER FUNCTIONS - MUST BE FIRST!
+# =============================================================================
+
+print_step() {
+    echo -e "${CYAN}[STEP ${1}/${2}]${NC} ${WHITE}${3}...${NC}"
+}
+
+print_substep() {
+    echo -e "  ${GREEN}✓${NC} ${1}"
+}
+
+print_info() {
+    echo -e "${YELLOW}ℹ${NC} ${1}"
+}
+
+print_warning() {
+    echo -e "${RED}⚠${NC} ${1}"
+}
+
+print_success() {
+    echo -e "${GREEN}✅${NC} ${1}"
+}
+
+print_error() {
+    echo -e "${RED}❌${NC} ${1}"
+}
+
+# =============================================================================
+# BANNER FUNCTIONS
+# =============================================================================
+
+print_banner() {
+    clear
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${WHITE}        SERVICE LOAD MONITOR v2.2.2 (Ultimate)           ${BLUE}║${NC}"
+    echo -e "${BLUE}╠════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${BLUE}║${GREEN}  Author:  Wael Isa                                      ${BLUE}║${NC}"
+    echo -e "${BLUE}║${GREEN}  Version: 2.2.2 (Auto-Dependency Edition)              ${BLUE}║${NC}"
+    echo -e "${BLUE}║${GREEN}  Date:    February 18, 2026                             ${BLUE}║${NC}"
+    echo -e "${BLUE}║${GREEN}  Website: https://www.wael.name                         ${BLUE}║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+show_features() {
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${WHITE}               FEATURE HIGHLIGHTS v2.2.2${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${GREEN}📦 Complete Dependency Management${NC}"
+    echo -e "  • Detects 30+ required commands"
+    echo -e "  • Includes procps for ps/uptime/pgrep"
+    echo -e "  • Full package maps for all distributions"
+    echo -e "  • Automatic installation with verification"
+    echo ""
+    echo -e "${GREEN}🔄 Safe Update System${NC}"
+    echo -e "  • Version detection for existing installations"
+    echo -e "  • Automatic backup before updates"
+    echo -e "  • Configuration migration"
+    echo -e "  • One-command rollback"
+    echo ""
+    echo -e "${GREEN}💾 Backup & Recovery${NC}"
+    echo -e "  • Full configuration backup"
+    echo -e "  • Service state preservation"
+    echo -e "  • Automatic backup rotation (keeps last 5)"
+    echo ""
+    echo -e "${GREEN}🛠️  System Maintenance Tools${NC}"
+    echo -e "  • One-command system update"
+    echo -e "  • Safe reboot with countdown"
+    echo -e "  • Automatic backup before updates"
+    echo ""
+    echo -e "${GREEN}🔐 Sudo Capability Check${NC}"
+    echo -e "  • Verifies user has sudo privileges"
+    echo -e "  • Auto-elevation when needed"
+    echo -e "  • Clear error messages"
+    echo ""
+    echo -e "${GREEN}☁️  Cloud Platform Awareness${NC}"
+    echo -e "  • Auto-detects AWS, GCP, Azure, Oracle Cloud"
+    echo -e "  • Provides cloud-specific security group instructions"
+    echo -e "  • Prevents 'dashboard doesn't work' support tickets"
+    echo ""
+}
+
+# =============================================================================
+# ENVIRONMENT CHECK FUNCTIONS
+# =============================================================================
+
+check_sudo() {
+    if [[ "${EUID}" -eq 0 ]]; then
+        return 0
+    fi
+
+    if command -v sudo &> /dev/null; then
+        if sudo -n true 2>/dev/null; then
+            echo -e "${GREEN}✓ Sudo access available (passwordless)${NC}"
+            return 0
+        else
+            echo -e "${YELLOW}⚠ Sudo requires password${NC}"
+            # Try to get sudo once to cache password
+            if sudo -v 2>/dev/null; then
+                echo -e "${GREEN}✓ Sudo access granted${NC}"
+                return 0
+            else
+                echo -e "${RED}✗ No sudo access available${NC}"
+                return 1
+            fi
+        fi
+    else
+        echo -e "${RED}✗ sudo command not found${NC}"
+        return 1
+    fi
+}
+
+run_with_sudo() {
+    if [[ "${EUID}" -eq 0 ]]; then
+        "$@"
+    elif command -v sudo &> /dev/null; then
+        sudo "$@"
+    else
+        echo -e "${RED}Error: Need root privileges to run: $*${NC}"
+        return 1
+    fi
+}
+
+detect_package_manager() {
+    if command -v apt-get &> /dev/null; then
+        echo "apt"
+    elif command -v dnf &> /dev/null; then
+        echo "dnf"
+    elif command -v yum &> /dev/null; then
+        echo "yum"
+    elif command -v pacman &> /dev/null; then
+        echo "pacman"
+    elif command -v apk &> /dev/null; then
+        echo "apk"
+    else
+        echo "unknown"
+    fi
+}
+
+detect_distro() {
+    local os=""
+    local ver=""
+
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        os="${NAME}"
+        ver="${VERSION_ID}"
+    elif type lsb_release >/dev/null 2>&1; then
+        os=$(lsb_release -si)
+        ver=$(lsb_release -sr)
+    elif [[ -f /etc/debian_version ]]; then
+        os="Debian"
+        ver=$(cat /etc/debian_version)
+    elif [[ -f /etc/redhat-release ]]; then
+        os="Red Hat"
+        ver=$(cat /etc/redhat-release | sed 's/.*release //;s/ .*//')
+    elif [[ -f /etc/arch-release ]]; then
+        os="Arch Linux"
+        ver="rolling"
+    elif [[ -f /etc/alpine-release ]]; then
+        os="Alpine"
+        ver=$(cat /etc/alpine-release)
+    else
+        os="Unknown"
+        ver="Unknown"
+    fi
+
+    echo "${os} ${ver}"
+}
+
+detect_cloud() {
+    local cloud="${CLOUD_NONE}"
+    local details=""
+
+    # Check for AWS
+    if curl -s --max-time 2 http://169.254.169.254/latest/meta-data/ &> /dev/null; then
+        cloud="${CLOUD_AWS}"
+        if curl -s --max-time 2 http://169.254.169.254/latest/meta-data/instance-type &> /dev/null; then
+            local instance_type
+            instance_type=$(curl -s --max-time 2 http://169.254.169.254/latest/meta-data/instance-type)
+            details="Instance Type: ${instance_type}"
+        fi
+    # Check for GCP
+    elif curl -s --max-time 2 -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/ &> /dev/null; then
+        cloud="${CLOUD_GCP}"
+        if curl -s --max-time 2 -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/machine-type &> /dev/null; then
+            local machine_type
+            machine_type=$(curl -s --max-time 2 -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/machine-type | awk -F/ '{print $NF}')
+            details="Machine Type: ${machine_type}"
+        fi
+    # Check for Azure
+    elif curl -s --max-time 2 -H "Metadata: true" "http://169.254.169.254/metadata/instance?api-version=2017-08-01" &> /dev/null; then
+        cloud="${CLOUD_AZURE}"
+        if curl -s --max-time 2 -H "Metadata: true" "http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2017-08-01" &> /dev/null; then
+            local vm_size
+            vm_size=$(curl -s --max-time 2 -H "Metadata: true" "http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2017-08-01")
+            details="VM Size: ${vm_size}"
+        fi
+    # Check for Oracle Cloud
+    elif curl -s --max-time 2 http://169.254.169.254/opc/v1/instance/ &> /dev/null; then
+        cloud="${CLOUD_ORACLE}"
+        if curl -s --max-time 2 http://169.254.169.254/opc/v1/instance/shape &> /dev/null; then
+            local shape
+            shape=$(curl -s --max-time 2 http://169.254.169.254/opc/v1/instance/shape)
+            details="Shape: ${shape}"
+        fi
+    fi
+
+    echo "${cloud}|${details}"
+}
+
+# =============================================================================
+# PACKAGE MANAGEMENT FUNCTIONS
+# =============================================================================
 
 # Complete package lists by distribution
 declare -A PKG_APT=(
@@ -235,216 +452,6 @@ declare -A PKG_APK=(
     ["uname"]="coreutils"
 )
 
-# Function to print banner
-print_banner() {
-    clear
-    echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${WHITE}        SERVICE LOAD MONITOR v2.2.2 (Ultimate)           ${BLUE}║${NC}"
-    echo -e "${BLUE}╠════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "${BLUE}║${GREEN}  Author:  Wael Isa                                      ${BLUE}║${NC}"
-    echo -e "${BLUE}║${GREEN}  Version: 2.2.2 (Auto-Dependency Edition)              ${BLUE}║${NC}"
-    echo -e "${BLUE}║${GREEN}  Date:    February 17, 2026                             ${BLUE}║${NC}"
-    echo -e "${BLUE}║${GREEN}  Website: https://www.wael.name                         ${BLUE}║${NC}"
-    echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-}
-
-# Function to show feature highlights
-show_features() {
-    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${WHITE}               FEATURE HIGHLIGHTS v2.2.2${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo ""
-    echo -e "${GREEN}📦 Complete Dependency Management${NC}"
-    echo -e "  • Detects 30+ required commands"
-    echo -e "  • Includes procps for ps/uptime/pgrep"
-    echo -e "  • Full package maps for all distributions"
-    echo -e "  • Automatic installation with verification"
-    echo ""
-    echo -e "${GREEN}🔄 Safe Update System${NC}"
-    echo -e "  • Version detection for existing installations"
-    echo -e "  • Automatic backup before updates"
-    echo -e "  • Configuration migration"
-    echo -e "  • One-command rollback"
-    echo ""
-    echo -e "${GREEN}💾 Backup & Recovery${NC}"
-    echo -e "  • Full configuration backup"
-    echo -e "  • Service state preservation"
-    echo -e "  • Automatic backup rotation (keeps last 5)"
-    echo ""
-    echo -e "${GREEN}🛠️  System Maintenance Tools${NC}"
-    echo -e "  • One-command system update"
-    echo -e "  • Safe reboot with countdown"
-    echo -e "  • Automatic backup before updates"
-    echo ""
-    echo -e "${GREEN}🔐 Sudo Capability Check${NC}"
-    echo -e "  • Verifies user has sudo privileges"
-    echo -e "  • Auto-elevation when needed"
-    echo -e "  • Clear error messages"
-    echo ""
-    echo -e "${GREEN}☁️  Cloud Platform Awareness${NC}"
-    echo -e "  • Auto-detects AWS, GCP, Azure, Oracle Cloud"
-    echo -e "  • Provides cloud-specific security group instructions"
-    echo -e "  • Prevents "dashboard doesn't work" support tickets"
-    echo ""
-}
-
-# Function to print step-by-step info
-print_step() {
-    echo -e "${CYAN}[STEP ${1}/${2}]${NC} ${WHITE}${3}...${NC}"
-}
-
-print_substep() {
-    echo -e "  ${GREEN}✓${NC} ${1}"
-}
-
-print_info() {
-    echo -e "${YELLOW}ℹ${NC} ${1}"
-}
-
-print_warning() {
-    echo -e "${RED}⚠${NC} ${1}"
-}
-
-print_success() {
-    echo -e "${GREEN}✅${NC} ${1}"
-}
-
-print_error() {
-    echo -e "${RED}❌${NC} ${1}"
-}
-
-# Function to check sudo capability
-check_sudo() {
-    if [[ "${EUID}" -eq 0 ]]; then
-        return 0
-    fi
-
-    if command -v sudo &> /dev/null; then
-        if sudo -n true 2>/dev/null; then
-            echo -e "${GREEN}✓ Sudo access available (passwordless)${NC}"
-            return 0
-        else
-            echo -e "${YELLOW}⚠ Sudo requires password${NC}"
-            # Try to get sudo once to cache password
-            if sudo -v 2>/dev/null; then
-                echo -e "${GREEN}✓ Sudo access granted${NC}"
-                return 0
-            else
-                echo -e "${RED}✗ No sudo access available${NC}"
-                return 1
-            fi
-        fi
-    else
-        echo -e "${RED}✗ sudo command not found${NC}"
-        return 1
-    fi
-}
-
-# Function to run command with sudo if needed
-run_with_sudo() {
-    if [[ "${EUID}" -eq 0 ]]; then
-        "$@"
-    elif command -v sudo &> /dev/null; then
-        sudo "$@"
-    else
-        echo -e "${RED}Error: Need root privileges to run: $*${NC}"
-        return 1
-    fi
-}
-
-# Function to detect package manager
-detect_package_manager() {
-    if command -v apt-get &> /dev/null; then
-        echo "apt"
-    elif command -v dnf &> /dev/null; then
-        echo "dnf"
-    elif command -v yum &> /dev/null; then
-        echo "yum"
-    elif command -v pacman &> /dev/null; then
-        echo "pacman"
-    elif command -v apk &> /dev/null; then
-        echo "apk"
-    else
-        echo "unknown"
-    fi
-}
-
-# Function to detect Linux distribution
-detect_distro() {
-    local os=""
-    local ver=""
-
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        os="${NAME}"
-        ver="${VERSION_ID}"
-    elif type lsb_release >/dev/null 2>&1; then
-        os=$(lsb_release -si)
-        ver=$(lsb_release -sr)
-    elif [[ -f /etc/debian_version ]]; then
-        os="Debian"
-        ver=$(cat /etc/debian_version)
-    elif [[ -f /etc/redhat-release ]]; then
-        os="Red Hat"
-        ver=$(cat /etc/redhat-release | sed 's/.*release //;s/ .*//')
-    elif [[ -f /etc/arch-release ]]; then
-        os="Arch Linux"
-        ver="rolling"
-    elif [[ -f /etc/alpine-release ]]; then
-        os="Alpine"
-        ver=$(cat /etc/alpine-release)
-    else
-        os="Unknown"
-        ver="Unknown"
-    fi
-
-    echo "${os} ${ver}"
-}
-
-# Function to detect cloud environment
-detect_cloud() {
-    local cloud="${CLOUD_NONE}"
-    local details=""
-
-    # Check for AWS
-    if curl -s --max-time 2 http://169.254.169.254/latest/meta-data/ &> /dev/null; then
-        cloud="${CLOUD_AWS}"
-        if curl -s --max-time 2 http://169.254.169.254/latest/meta-data/instance-type &> /dev/null; then
-            local instance_type
-            instance_type=$(curl -s --max-time 2 http://169.254.169.254/latest/meta-data/instance-type)
-            details="Instance Type: ${instance_type}"
-        fi
-    # Check for GCP
-    elif curl -s --max-time 2 -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/ &> /dev/null; then
-        cloud="${CLOUD_GCP}"
-        if curl -s --max-time 2 -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/machine-type &> /dev/null; then
-            local machine_type
-            machine_type=$(curl -s --max-time 2 -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/machine-type | awk -F/ '{print $NF}')
-            details="Machine Type: ${machine_type}"
-        fi
-    # Check for Azure
-    elif curl -s --max-time 2 -H "Metadata: true" "http://169.254.169.254/metadata/instance?api-version=2017-08-01" &> /dev/null; then
-        cloud="${CLOUD_AZURE}"
-        if curl -s --max-time 2 -H "Metadata: true" "http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2017-08-01" &> /dev/null; then
-            local vm_size
-            vm_size=$(curl -s --max-time 2 -H "Metadata: true" "http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2017-08-01")
-            details="VM Size: ${vm_size}"
-        fi
-    # Check for Oracle Cloud
-    elif curl -s --max-time 2 http://169.254.169.254/opc/v1/instance/ &> /dev/null; then
-        cloud="${CLOUD_ORACLE}"
-        if curl -s --max-time 2 http://169.254.169.254/opc/v1/instance/shape &> /dev/null; then
-            local shape
-            shape=$(curl -s --max-time 2 http://169.254.169.254/opc/v1/instance/shape)
-            details="Shape: ${shape}"
-        fi
-    fi
-
-    echo "${cloud}|${details}"
-}
-
-# Function to get package name for command
 get_package_name() {
     local cmd="$1"
     local pkg_manager="$2"
@@ -471,7 +478,6 @@ get_package_name() {
     esac
 }
 
-# Function to install package
 install_package() {
     local pkg="$1"
     local pkg_manager="$2"
@@ -503,12 +509,14 @@ install_package() {
     return $?
 }
 
-# Function to check if command exists
 command_exists() {
     command -v "$1" &> /dev/null
 }
 
-# Function to check and install dependencies
+# =============================================================================
+# DEPENDENCY CHECK FUNCTION
+# =============================================================================
+
 check_and_install_dependencies() {
     # Complete list of required commands
     local required_commands=(
@@ -692,7 +700,10 @@ check_and_install_dependencies() {
     return 0
 }
 
-# Function to compare versions
+# =============================================================================
+# VERSION MANAGEMENT FUNCTIONS
+# =============================================================================
+
 version_compare() {
     if [[ "$1" == "$2" ]]; then
         echo "equal"
@@ -727,7 +738,6 @@ version_compare() {
     echo "equal"
 }
 
-# Function to check existing installation
 check_existing_installation() {
     local installed_version=""
     local has_old_files=false
@@ -751,7 +761,10 @@ check_existing_installation() {
     echo "${installed_version}|${has_old_files}"
 }
 
-# Function to backup existing installation
+# =============================================================================
+# BACKUP FUNCTIONS
+# =============================================================================
+
 backup_existing() {
     local backup_id="backup_$(date '+%Y%m%d_%H%M%S')"
     local backup_path="${BACKUP_DIR}/${backup_id}"
@@ -815,7 +828,6 @@ EOF
     echo "${backup_id}"
 }
 
-# Function to restore from backup
 restore_from_backup() {
     local backup_id="$1"
     local backup_path="${BACKUP_DIR}/${backup_id}"
@@ -876,7 +888,10 @@ restore_from_backup() {
     print_success "Restore completed"
 }
 
-# Function to migrate old configuration
+# =============================================================================
+# MIGRATION FUNCTIONS
+# =============================================================================
+
 migrate_configuration() {
     print_info "Migrating existing configuration..."
 
@@ -928,7 +943,10 @@ migrate_configuration() {
     print_success "Migration completed"
 }
 
-# Function to cleanup old files after successful update
+# =============================================================================
+# CLEANUP FUNCTIONS
+# =============================================================================
+
 cleanup_old_files() {
     print_info "Cleaning up old files..."
 
@@ -948,13 +966,16 @@ cleanup_old_files() {
 
     # Keep only last 5 backups
     if [[ -d "${BACKUP_DIR}" ]]; then
-        cd "${BACKUP_DIR}"
+        cd "${BACKUP_DIR}" || return
         ls -t | tail -n +6 | xargs -r rm -rf
-        cd - > /dev/null
+        cd - > /dev/null || return
     fi
 }
 
-# Function to create monitor script
+# =============================================================================
+# INSTALLATION FUNCTIONS
+# =============================================================================
+
 create_monitor_script() {
     cat > "${MONITOR_SCRIPT}" << 'EOF'
 #!/bin/bash
@@ -964,7 +985,7 @@ create_monitor_script() {
 # =============================================================================
 # Author:  Wael Isa
 # Version: 2.2.2
-# Date:    February 17, 2026
+# Date:    February 18, 2026
 # Website: https://www.wael.name
 # =============================================================================
 
@@ -998,9 +1019,9 @@ done
 EOF
 
     chmod +x "${MONITOR_SCRIPT}"
+    print_substep "Monitor script created"
 }
 
-# Function to create configuration file
 create_config_file() {
     mkdir -p "${CONFIG_BASE_DIR}"
 
@@ -1010,7 +1031,7 @@ create_config_file() {
 # =============================================================================
 # Author:  Wael Isa
 # Version: 2.2.2
-# Date:    February 17, 2026
+# Date:    February 18, 2026
 # Website: https://www.wael.name
 # =============================================================================
 
@@ -1037,9 +1058,14 @@ ENABLE_PREDICTIVE="yes"
 GRACEFUL_RELOADS="yes"
 PROTECT_CRITICAL="yes"
 EOF
+
+    print_substep "Configuration file created"
 }
 
-# Function to install the monitor
+# =============================================================================
+# MAIN INSTALLATION FUNCTION
+# =============================================================================
+
 install_monitor() {
     print_banner
 
@@ -1307,7 +1333,10 @@ EOF
     echo ""
 }
 
-# Function to remove the monitor
+# =============================================================================
+# REMOVAL FUNCTIONS
+# =============================================================================
+
 remove_monitor() {
     print_banner
 
@@ -1396,7 +1425,10 @@ remove_monitor() {
     print_success "Service Load Monitor has been removed"
 }
 
-# Function to show status
+# =============================================================================
+# STATUS FUNCTIONS
+# =============================================================================
+
 show_status() {
     print_banner
 
@@ -1438,11 +1470,14 @@ show_status() {
     if [[ -f "${LOG_FILE}" ]]; then
         echo ""
         echo -e "${WHITE}Recent Log Entries:${NC}"
-        tail -5 "${LOG_FILE}" | sed 's/^/  /'
+        tail -5 "${LOG_FILE}" 2>/dev/null | sed 's/^/  /' || echo "  No logs yet"
     fi
 }
 
-# Function to show logs
+# =============================================================================
+# LOG FUNCTIONS
+# =============================================================================
+
 show_logs() {
     if [[ -f "${LOG_FILE}" ]]; then
         tail -f "${LOG_FILE}"
@@ -1451,7 +1486,10 @@ show_logs() {
     fi
 }
 
-# Function to show help
+# =============================================================================
+# HELP FUNCTION
+# =============================================================================
+
 show_help() {
     print_banner
     echo -e "${WHITE}Available Commands:${NC}"
@@ -1467,7 +1505,10 @@ show_help() {
     echo ""
 }
 
-# Main menu
+# =============================================================================
+# MAIN MENU
+# =============================================================================
+
 show_menu() {
     print_banner
 
@@ -1485,7 +1526,10 @@ show_menu() {
     echo -n -e "${YELLOW}Select option [1-8]: ${NC}"
 }
 
-# Main script execution
+# =============================================================================
+# MAIN FUNCTION
+# =============================================================================
+
 main() {
     # Check if running with command argument
     if [[ $# -gt 0 ]]; then
@@ -1505,6 +1549,8 @@ main() {
             backup)
                 check_sudo
                 backup_existing "manual"
+                echo ""
+                print_success "Backup created"
                 ;;
             restore)
                 check_sudo
@@ -1512,7 +1558,7 @@ main() {
                 ls -1 "${BACKUP_DIR}" 2>/dev/null || echo "No backups found"
                 echo ""
                 echo -n "Enter backup ID: "
-                read backup_id
+                read -r backup_id
                 restore_from_backup "${backup_id}"
                 ;;
             version)
@@ -1556,15 +1602,19 @@ main() {
                 show_logs
                 ;;
             5)
+                check_sudo
                 backup_existing "manual"
+                echo ""
+                print_success "Backup created"
                 read -p "Press Enter to continue..."
                 ;;
             6)
+                check_sudo
                 echo "Available backups:"
                 ls -1 "${BACKUP_DIR}" 2>/dev/null || echo "No backups found"
                 echo ""
                 echo -n "Enter backup ID: "
-                read backup_id
+                read -r backup_id
                 restore_from_backup "${backup_id}"
                 read -p "Press Enter to continue..."
                 ;;
