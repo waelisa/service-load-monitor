@@ -1,4 +1,4 @@
-# **🚀 Service Load Monitor v2.2.2**
+# **🚀 Service Load Monitor**
 
 An enterprise-grade, "self-healing" system monitoring agent for Linux. This script goes beyond simple alerts by intelligently identifying high-load processes and automatically recovering services to ensure maximum uptime.
 
