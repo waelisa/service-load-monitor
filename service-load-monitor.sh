@@ -246,40 +246,42 @@ detect_distro() {
     echo "${os} ${ver}"
 }
 
+# Function to detect cloud environment (silent version)
 detect_cloud() {
     local cloud="${CLOUD_NONE}"
     local details=""
 
-    # Check for AWS
-    if curl -s --max-time 2 http://169.254.169.254/latest/meta-data/ &> /dev/null; then
+    # Check for AWS - suppress all output
+    if curl -s --max-time 2 -f http://169.254.169.254/latest/meta-data/ &> /dev/null; then
         cloud="${CLOUD_AWS}"
-        if curl -s --max-time 2 http://169.254.169.254/latest/meta-data/instance-type &> /dev/null; then
-            local instance_type
-            instance_type=$(curl -s --max-time 2 http://169.254.169.254/latest/meta-data/instance-type)
+        # Try to get instance type silently
+        local instance_type
+        instance_type=$(curl -s --max-time 2 -f http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null)
+        if [[ -n "${instance_type}" ]] && [[ ! "${instance_type}" =~ \<html ]]; then
             details="Instance Type: ${instance_type}"
         fi
     # Check for GCP
-    elif curl -s --max-time 2 -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/ &> /dev/null; then
+    elif curl -s --max-time 2 -f -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/ &> /dev/null; then
         cloud="${CLOUD_GCP}"
-        if curl -s --max-time 2 -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/machine-type &> /dev/null; then
-            local machine_type
-            machine_type=$(curl -s --max-time 2 -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/machine-type | awk -F/ '{print $NF}')
+        local machine_type
+        machine_type=$(curl -s --max-time 2 -f -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/machine-type 2>/dev/null | awk -F/ '{print $NF}')
+        if [[ -n "${machine_type}" ]]; then
             details="Machine Type: ${machine_type}"
         fi
     # Check for Azure
-    elif curl -s --max-time 2 -H "Metadata: true" "http://169.254.169.254/metadata/instance?api-version=2017-08-01" &> /dev/null; then
+    elif curl -s --max-time 2 -f -H "Metadata: true" "http://169.254.169.254/metadata/instance?api-version=2017-08-01" &> /dev/null; then
         cloud="${CLOUD_AZURE}"
-        if curl -s --max-time 2 -H "Metadata: true" "http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2017-08-01" &> /dev/null; then
-            local vm_size
-            vm_size=$(curl -s --max-time 2 -H "Metadata: true" "http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2017-08-01")
+        local vm_size
+        vm_size=$(curl -s --max-time 2 -f -H "Metadata: true" "http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2017-08-01" 2>/dev/null)
+        if [[ -n "${vm_size}" ]]; then
             details="VM Size: ${vm_size}"
         fi
     # Check for Oracle Cloud
-    elif curl -s --max-time 2 http://169.254.169.254/opc/v1/instance/ &> /dev/null; then
+    elif curl -s --max-time 2 -f http://169.254.169.254/opc/v1/instance/ &> /dev/null; then
         cloud="${CLOUD_ORACLE}"
-        if curl -s --max-time 2 http://169.254.169.254/opc/v1/instance/shape &> /dev/null; then
-            local shape
-            shape=$(curl -s --max-time 2 http://169.254.169.254/opc/v1/instance/shape)
+        local shape
+        shape=$(curl -s --max-time 2 -f http://169.254.169.254/opc/v1/instance/shape 2>/dev/null)
+        if [[ -n "${shape}" ]]; then
             details="Shape: ${shape}"
         fi
     fi
@@ -1429,6 +1431,7 @@ remove_monitor() {
 # STATUS FUNCTIONS
 # =============================================================================
 
+# Function to show status (clean version)
 show_status() {
     print_banner
 
@@ -1440,7 +1443,22 @@ show_status() {
     # System info
     echo -e "${WHITE}System Information:${NC}"
     echo "  • Distribution: $(detect_distro)"
-    echo "  • Cloud: $(detect_cloud | cut -d'|' -f1)"
+
+    # Get cloud info without HTML
+    local cloud_info
+    cloud_info=$(detect_cloud)
+    local cloud="${cloud_info%|*}"
+    local cloud_details="${cloud_info#*|}"
+
+    if [[ "${cloud}" != "${CLOUD_NONE}" ]]; then
+        echo "  • Cloud Platform: ${cloud}"
+        if [[ -n "${cloud_details}" ]] && [[ ! "${cloud_details}" =~ \<html ]]; then
+            echo "  • ${cloud_details}"
+        fi
+    else
+        echo "  • Cloud Platform: None detected"
+    fi
+
     echo "  • Hostname: $(hostname)"
     echo "  • Kernel: $(uname -r)"
     echo "  • Uptime: $(uptime | sed 's/.*up \([^,]*\),.*/\1/')"
