@@ -1,5 +1,3 @@
-Here is a professional, high-quality README.md file tailored for your GitHub repository. It highlights the "self-healing" nature of the script and makes it easy for new users to get started.
-
 # **🚀 Service Load Monitor v2.2.2**
 
 An enterprise-grade, "self-healing" system monitoring agent for Linux. This script goes beyond simple alerts by intelligently identifying high-load processes and automatically recovering services to ensure maximum uptime.
