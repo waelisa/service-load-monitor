@@ -10,7 +10,7 @@
 # =============================================================================
 # Description: Enterprise-grade service monitoring with intelligent firewall
 #              management, port conflict resolution, universal compatibility,
-#              cloud platform awareness, and automatic dependency installation
+#              cloud platform awareness, and COMPLETE automatic installation
 # =============================================================================
 
 # Color codes for better UI
@@ -23,7 +23,7 @@ CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
-# Script information
+# Script information (version only in header)
 SCRIPT_NAME="Service Load Monitor"
 SCRIPT_VERSION="2.2.2"
 SCRIPT_AUTHOR="Wael Isa"
@@ -33,27 +33,29 @@ SCRIPT_DATE="February 18, 2026"
 # Minimum required version for updates
 MIN_VERSION="1.0.0"
 
-# File paths - Using variables with quotes for safety
+# File paths - SIMPLE NAMES (no version numbers)
 BASE_DIR="/usr/local/bin"
 CONFIG_BASE_DIR="/etc/service-monitor"
 LOG_BASE_DIR="/var/log"
 LIB_BASE_DIR="/var/lib/service-monitor"
 WWW_BASE_DIR="/var/www/html"
 
-MONITOR_SCRIPT="${BASE_DIR}/service_load_monitor_v2.2.2.sh"
+MONITOR_SCRIPT="${BASE_DIR}/service-monitor.sh"
 MONITOR_SCRIPT_LEGACY="${BASE_DIR}/service_load_monitor.sh"
-SERVICE_FILE="/etc/systemd/system/service-monitor-v2.2.2.service"
-SERVICE_FILE_LEGACY="/etc/systemd/system/service-monitor.service"
-CONFIG_FILE="${CONFIG_BASE_DIR}/config-v2.2.2.conf"
-CONFIG_FILE_LEGACY="${CONFIG_BASE_DIR}/config.conf"
-LOG_FILE="${LOG_BASE_DIR}/service-load-monitor-v2.2.2.log"
-LOG_FILE_LEGACY="${LOG_BASE_DIR}/service-load-monitor.log"
-LOGROTATE_FILE="/etc/logrotate.d/service-load-monitor"
+SERVICE_FILE="/etc/systemd/system/service-monitor.service"
+SERVICE_FILE_LEGACY="/etc/systemd/system/service-monitor-v2.2.2.service"
+SERVICE_FILE_OLD="/etc/systemd/system/service-monitor.service.old"
+CONFIG_FILE="${CONFIG_BASE_DIR}/config.conf"
+CONFIG_FILE_LEGACY="${CONFIG_BASE_DIR}/config-v2.2.2.conf"
+LOG_FILE="${LOG_BASE_DIR}/service-monitor.log"
+LOG_FILE_LEGACY="${LOG_BASE_DIR}/service-load-monitor-v2.2.2.log"
+LOGROTATE_FILE="/etc/logrotate.d/service-monitor"
 SNAPSHOT_DIR="${LOG_BASE_DIR}/service-monitor-snapshots"
 PERF_DATA_DIR="${LIB_BASE_DIR}/perf"
 DASHBOARD_DIR="${WWW_BASE_DIR}/service-monitor"
 DASHBOARD_SCRIPT="${BASE_DIR}/service-monitor-dashboard.sh"
-DASHBOARD_SERVICE="/etc/systemd/system/service-monitor-dashboard.service"
+DASHBOARD_HTTP_SERVICE="/etc/systemd/system/service-monitor-http.service"
+DASHBOARD_UPDATER_SERVICE="/etc/systemd/system/service-monitor-updater.service"
 CLIENT_SCRIPT="${BASE_DIR}/service-monitor-client.sh"
 FIREWALL_LOG="${LOG_BASE_DIR}/firewall-setup.log"
 UPDATE_SCRIPT="${BASE_DIR}/service-monitor-update.sh"
@@ -103,6 +105,63 @@ print_error() {
 }
 
 # =============================================================================
+# CLEANUP OLD VERSIONED FILES
+# =============================================================================
+
+cleanup_old_versioned_files() {
+    print_info "Checking for old versioned files..."
+
+    local old_files_removed=0
+
+    # Stop and disable old versioned services
+    if systemctl list-units --full -all | grep -q "service-monitor-v2.2.2.service"; then
+        print_substep "Stopping old versioned service..."
+        systemctl stop service-monitor-v2.2.2.service 2>/dev/null
+        systemctl disable service-monitor-v2.2.2.service 2>/dev/null
+        old_files_removed=1
+    fi
+
+    # Remove old versioned service file
+    if [[ -f "${SERVICE_FILE_LEGACY}" ]]; then
+        print_substep "Removing old versioned service file..."
+        rm -f "${SERVICE_FILE_LEGACY}"
+        old_files_removed=1
+    fi
+
+    # Remove old versioned config file
+    if [[ -f "${CONFIG_FILE_LEGACY}" ]]; then
+        print_substep "Removing old versioned config file..."
+        # Backup config if it exists
+        if [[ -f "${CONFIG_FILE_LEGACY}" ]] && [[ ! -f "${CONFIG_FILE}" ]]; then
+            cp "${CONFIG_FILE_LEGACY}" "${CONFIG_FILE}" 2>/dev/null
+            print_substep "Migrated config from old version"
+        fi
+        rm -f "${CONFIG_FILE_LEGACY}"
+        old_files_removed=1
+    fi
+
+    # Remove old versioned log file (don't remove, just note)
+    if [[ -f "${LOG_FILE_LEGACY}" ]]; then
+        print_substep "Old log file found: ${LOG_FILE_LEGACY} (will be kept)"
+        old_files_removed=1
+    fi
+
+    # Remove old versioned monitor script
+    if [[ -f "${MONITOR_SCRIPT_LEGACY}" ]] && [[ "${MONITOR_SCRIPT_LEGACY}" != "${MONITOR_SCRIPT}" ]]; then
+        print_substep "Removing old versioned monitor script..."
+        rm -f "${MONITOR_SCRIPT_LEGACY}"
+        old_files_removed=1
+    fi
+
+    if [[ ${old_files_removed} -eq 1 ]]; then
+        print_success "Cleaned up old versioned files"
+        systemctl daemon-reload
+    else
+        print_substep "No old versioned files found"
+    fi
+}
+
+# =============================================================================
 # BANNER FUNCTIONS
 # =============================================================================
 
@@ -112,7 +171,7 @@ print_banner() {
     echo -e "${BLUE}║${WHITE}        SERVICE LOAD MONITOR v2.2.2 (Ultimate)           ${BLUE}║${NC}"
     echo -e "${BLUE}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${BLUE}║${GREEN}  Author:  Wael Isa                                      ${BLUE}║${NC}"
-    echo -e "${BLUE}║${GREEN}  Version: 2.2.2 (Auto-Dependency Edition)              ${BLUE}║${NC}"
+    echo -e "${BLUE}║${GREEN}  Version: 2.2.2 (Complete Edition)                     ${BLUE}║${NC}"
     echo -e "${BLUE}║${GREEN}  Date:    February 18, 2026                             ${BLUE}║${NC}"
     echo -e "${BLUE}║${GREEN}  Website: https://www.wael.name                         ${BLUE}║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
@@ -141,20 +200,21 @@ show_features() {
     echo -e "  • Service state preservation"
     echo -e "  • Automatic backup rotation (keeps last 5)"
     echo ""
-    echo -e "${GREEN}🛠️  System Maintenance Tools${NC}"
-    echo -e "  • One-command system update"
-    echo -e "  • Safe reboot with countdown"
-    echo -e "  • Automatic backup before updates"
+    echo -e "${GREEN}🌐 Complete Web Dashboard${NC}"
+    echo -e "  • Auto-starting HTTP server on port 8080"
+    echo -e "  • Real-time system metrics"
+    echo -e "  • Service status monitoring"
+    echo -e "  • Automatic updates every 30 seconds"
+    echo ""
+    echo -e "${GREEN}🧹 Automatic Cleanup${NC}"
+    echo -e "  • Removes old versioned files on update"
+    echo -e "  • Migrates configuration automatically"
+    echo -e "  • Simple service names (no version numbers)"
     echo ""
     echo -e "${GREEN}🔐 Sudo Capability Check${NC}"
     echo -e "  • Verifies user has sudo privileges"
     echo -e "  • Auto-elevation when needed"
     echo -e "  • Clear error messages"
-    echo ""
-    echo -e "${GREEN}☁️  Cloud Platform Awareness${NC}"
-    echo -e "  • Auto-detects AWS, GCP, Azure, Oracle Cloud"
-    echo -e "  • Provides cloud-specific security group instructions"
-    echo -e "  • Prevents 'dashboard doesn't work' support tickets"
     echo ""
 }
 
@@ -246,7 +306,6 @@ detect_distro() {
     echo "${os} ${ver}"
 }
 
-# Function to detect cloud environment (silent version)
 # Function to detect cloud environment (completely silent, HTML-free)
 detect_cloud() {
     local cloud="${CLOUD_NONE}"
@@ -776,14 +835,13 @@ check_existing_installation() {
         installed_version=$(cat "${VERSION_FILE}")
     fi
 
-    # Check for legacy files
-    if [[ -f "${MONITOR_SCRIPT_LEGACY}" ]] || [[ -f "${SERVICE_FILE_LEGACY}" ]] || [[ -f "${CONFIG_FILE_LEGACY}" ]]; then
+    # Check for any existing service files
+    if [[ -f "${SERVICE_FILE}" ]] || [[ -f "${SERVICE_FILE_LEGACY}" ]]; then
         has_old_files=true
     fi
 
     # Check for running service
-    if systemctl is-active --quiet service-monitor.service 2>/dev/null || \
-       systemctl is-active --quiet service-monitor-v2.2.2.service 2>/dev/null; then
+    if systemctl is-active --quiet service-monitor.service 2>/dev/null; then
         has_old_files=true
     fi
 
@@ -808,27 +866,22 @@ backup_existing() {
     fi
 
     # Backup scripts
-    if [[ -f "${MONITOR_SCRIPT_LEGACY}" ]]; then
-        cp "${MONITOR_SCRIPT_LEGACY}" "${backup_path}/" 2>/dev/null
-    fi
     if [[ -f "${MONITOR_SCRIPT}" ]]; then
         cp "${MONITOR_SCRIPT}" "${backup_path}/" 2>/dev/null
     fi
-
-    # Backup service files
-    if [[ -f "${SERVICE_FILE_LEGACY}" ]]; then
-        cp "${SERVICE_FILE_LEGACY}" "${backup_path}/" 2>/dev/null
-    fi
-    if [[ -f "${SERVICE_FILE}" ]]; then
-        cp "${SERVICE_FILE}" "${backup_path}/" 2>/dev/null
-    fi
-
-    # Backup dashboard files
     if [[ -f "${DASHBOARD_SCRIPT}" ]]; then
         cp "${DASHBOARD_SCRIPT}" "${backup_path}/" 2>/dev/null
     fi
-    if [[ -f "${CLIENT_SCRIPT}" ]]; then
-        cp "${CLIENT_SCRIPT}" "${backup_path}/" 2>/dev/null
+
+    # Backup service files
+    if [[ -f "${SERVICE_FILE}" ]]; then
+        cp "${SERVICE_FILE}" "${backup_path}/" 2>/dev/null
+    fi
+    if [[ -f "${DASHBOARD_HTTP_SERVICE}" ]]; then
+        cp "${DASHBOARD_HTTP_SERVICE}" "${backup_path}/" 2>/dev/null
+    fi
+    if [[ -f "${DASHBOARD_UPDATER_SERVICE}" ]]; then
+        cp "${DASHBOARD_UPDATER_SERVICE}" "${backup_path}/" 2>/dev/null
     fi
 
     # Backup version info
@@ -839,10 +892,6 @@ backup_existing() {
     systemctl is-active --quiet service-monitor.service 2>/dev/null && \
         echo "active" > "${backup_path}/service-monitor.state" || \
         echo "inactive" > "${backup_path}/service-monitor.state"
-
-    systemctl is-active --quiet service-monitor-v2.2.2.service 2>/dev/null && \
-        echo "active" > "${backup_path}/service-monitor-v2.2.2.state" || \
-        echo "inactive" > "${backup_path}/service-monitor-v2.2.2.state"
 
     # Create backup manifest
     cat > "${backup_path}/manifest.txt" << EOF
@@ -869,9 +918,9 @@ restore_from_backup() {
     print_warning "Restoring from backup: ${backup_id}"
 
     # Stop current services
-    systemctl stop service-monitor-v2.2.2.service 2>/dev/null
     systemctl stop service-monitor.service 2>/dev/null
-    systemctl stop service-monitor-dashboard.service 2>/dev/null
+    systemctl stop service-monitor-http.service 2>/dev/null
+    systemctl stop service-monitor-updater.service 2>/dev/null
 
     # Restore configuration
     if [[ -d "${backup_path}/service-monitor" ]]; then
@@ -880,35 +929,29 @@ restore_from_backup() {
     fi
 
     # Restore scripts
-    if [[ -f "${backup_path}/service_load_monitor.sh" ]]; then
-        cp "${backup_path}/service_load_monitor.sh" "${BASE_DIR}/" 2>/dev/null
-        chmod +x "${BASE_DIR}/service_load_monitor.sh"
+    if [[ -f "${backup_path}/service-monitor.sh" ]]; then
+        cp "${backup_path}/service-monitor.sh" "${BASE_DIR}/" 2>/dev/null
+        chmod +x "${BASE_DIR}/service-monitor.sh"
     fi
-    if [[ -f "${backup_path}/service_load_monitor_v2.2.2.sh" ]]; then
-        cp "${backup_path}/service_load_monitor_v2.2.2.sh" "${BASE_DIR}/" 2>/dev/null
-        chmod +x "${BASE_DIR}/service_load_monitor_v2.2.2.sh"
+    if [[ -f "${backup_path}/service-monitor-dashboard.sh" ]]; then
+        cp "${backup_path}/service-monitor-dashboard.sh" "${BASE_DIR}/" 2>/dev/null
+        chmod +x "${BASE_DIR}/service-monitor-dashboard.sh"
     fi
 
     # Restore service files
     if [[ -f "${backup_path}/service-monitor.service" ]]; then
         cp "${backup_path}/service-monitor.service" "/etc/systemd/system/" 2>/dev/null
     fi
-    if [[ -f "${backup_path}/service-monitor-v2.2.2.service" ]]; then
-        cp "${backup_path}/service-monitor-v2.2.2.service" "/etc/systemd/system/" 2>/dev/null
+    if [[ -f "${backup_path}/service-monitor-http.service" ]]; then
+        cp "${backup_path}/service-monitor-http.service" "/etc/systemd/system/" 2>/dev/null
+    fi
+    if [[ -f "${backup_path}/service-monitor-updater.service" ]]; then
+        cp "${backup_path}/service-monitor-updater.service" "/etc/systemd/system/" 2>/dev/null
     fi
 
     # Restore version
     if [[ -f "${backup_path}/version.txt" ]]; then
         cp "${backup_path}/version.txt" "${VERSION_FILE}" 2>/dev/null
-    fi
-
-    # Restore service states
-    local old_state
-    if [[ -f "${backup_path}/service-monitor.state" ]]; then
-        old_state=$(cat "${backup_path}/service-monitor.state")
-        if [[ "${old_state}" == "active" ]]; then
-            systemctl start service-monitor.service 2>/dev/null
-        fi
     fi
 
     # Reload systemd
@@ -931,39 +974,8 @@ migrate_configuration() {
 
     # Migrate config file
     if [[ -f "${CONFIG_FILE_LEGACY}" ]] && [[ ! -f "${CONFIG_FILE}" ]]; then
-        print_substep "Migrating configuration from ${CONFIG_FILE_LEGACY}"
-
-        # Copy with modifications
-        sed 's/version:.*/version: 2.2.2/' "${CONFIG_FILE_LEGACY}" > "${CONFIG_FILE}" 2>/dev/null
-
-        # Add new settings if not present
-        if ! grep -q "ENABLE_PREDICTIVE" "${CONFIG_FILE}"; then
-            echo "" >> "${CONFIG_FILE}"
-            echo "# Added during migration to v2.2.2" >> "${CONFIG_FILE}"
-            echo "ENABLE_PREDICTIVE=\"yes\"" >> "${CONFIG_FILE}"
-        fi
-        if ! grep -q "DASHBOARD_PORT" "${CONFIG_FILE}"; then
-            echo "DASHBOARD_PORT=\"${DEFAULT_DASHBOARD_PORT}\"" >> "${CONFIG_FILE}"
-        fi
-    fi
-
-    # Migrate monitor script
-    if [[ -f "${MONITOR_SCRIPT_LEGACY}" ]] && [[ ! -f "${MONITOR_SCRIPT}" ]]; then
-        print_substep "Migrating monitor script"
-        cp "${MONITOR_SCRIPT_LEGACY}" "${MONITOR_SCRIPT}" 2>/dev/null
-        chmod +x "${MONITOR_SCRIPT}"
-    fi
-
-    # Migrate service file
-    if [[ -f "${SERVICE_FILE_LEGACY}" ]] && [[ ! -f "${SERVICE_FILE}" ]]; then
-        print_substep "Migrating service file"
-        cp "${SERVICE_FILE_LEGACY}" "${SERVICE_FILE}" 2>/dev/null
-    fi
-
-    # Migrate log files
-    if [[ -f "${LOG_FILE_LEGACY}" ]] && [[ ! -f "${LOG_FILE}" ]]; then
-        print_substep "Migrating log file"
-        cp "${LOG_FILE_LEGACY}" "${LOG_FILE}" 2>/dev/null
+        print_substep "Migrating configuration from old version"
+        cp "${CONFIG_FILE_LEGACY}" "${CONFIG_FILE}" 2>/dev/null
     fi
 
     # Save current version
@@ -973,32 +985,323 @@ migrate_configuration() {
 }
 
 # =============================================================================
-# CLEANUP FUNCTIONS
+# DASHBOARD FUNCTIONS
 # =============================================================================
 
-cleanup_old_files() {
-    print_info "Cleaning up old files..."
+create_dashboard_files() {
+    print_substep "Creating dashboard files..."
 
-    local keep_backup=false
+    # Create dashboard directory
+    mkdir -p "${DASHBOARD_DIR}"
 
-    echo -e "${YELLOW}Do you want to keep backup of old version? (y/N)${NC}"
-    read -p "> " keep_backup
+    # Create initial status.json
+    cat > "${DASHBOARD_DIR}/status.json" << EOF
+{
+    "last_update": "$(date '+%Y-%m-%d %H:%M:%S')",
+    "version": "${SCRIPT_VERSION}",
+    "author": "${SCRIPT_AUTHOR}",
+    "website": "${SCRIPT_URL}",
+    "servers": [
+        {
+            "id": "local",
+            "hostname": "$(hostname)",
+            "uptime": "$(uptime | sed 's/.*up \([^,]*\),.*/\1/')",
+            "load": "$(uptime | awk -F'load average:' '{print $2}' | xargs)",
+            "cpu_cores": $(nproc),
+            "memory": "$(free -h | grep Mem | awk '{print $3"/"$2}')",
+            "iowait": "0%",
+            "disk_usage": "$(df -h / | awk 'NR==2 {print $5}')",
+            "services": []
+        }
+    ],
+    "alerts": []
+}
+EOF
 
-    if [[ "${keep_backup}" =~ ^[Yy]$ ]]; then
-        print_info "Backup preserved at ${BACKUP_DIR}/pre_update"
-    else
-        rm -f "${MONITOR_SCRIPT_LEGACY}" 2>/dev/null
-        rm -f "${SERVICE_FILE_LEGACY}" 2>/dev/null
-        rm -f "${CONFIG_FILE_LEGACY}" 2>/dev/null
-        print_substep "Old files removed"
+    # Create index.html
+    cat > "${DASHBOARD_DIR}/index.html" << 'HTML'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="30">
+    <title>Service Monitor Dashboard - Wael Isa</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        .header {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .header h1 { color: #333; font-size: 2.5em; margin-bottom: 10px; }
+        .header .author { color: #666; font-size: 1.1em; }
+        .header .author a { color: #667eea; text-decoration: none; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .stat-card h3 { color: #666; font-size: 0.9em; margin-bottom: 10px; }
+        .stat-card .value { color: #333; font-size: 1.8em; font-weight: bold; }
+        .services-section {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .services-section h2 { color: #333; margin-bottom: 20px; }
+        .service-list { display: grid; gap: 10px; }
+        .service-item {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            align-items: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+        .service-name { font-weight: 600; color: #333; }
+        .service-status { text-align: center; }
+        .status-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+        .status-active { background: #d4edda; color: #155724; }
+        .status-inactive { background: #f8d7da; color: #721c24; }
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            color: white;
+        }
+        .footer a { color: white; text-decoration: none; }
+        .last-update { color: #999; font-size: 0.9em; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Service Load Monitor</h1>
+            <div class="author">by <a href="https://www.wael.name" target="_blank">Wael Isa</a> | v2.2.2</div>
+            <div class="last-update" id="lastUpdate">Loading...</div>
+        </div>
+
+        <div class="stats-grid" id="statsGrid"></div>
+
+        <div class="services-section">
+            <h2>📊 Monitored Services</h2>
+            <div class="service-list" id="serviceList"></div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>© 2026 <a href="https://www.wael.name" target="_blank">Wael Isa</a> - Service Load Monitor</p>
+    </div>
+
+    <script>
+        function refreshData() {
+            fetch('status.json?' + new Date().getTime())
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('lastUpdate').textContent = 'Last updated: ' + data.last_update;
+
+                    // Update stats
+                    const statsGrid = document.getElementById('statsGrid');
+                    if (data.servers && data.servers[0]) {
+                        const s = data.servers[0];
+                        statsGrid.innerHTML = `
+                            <div class="stat-card"><h3>System Load</h3><div class="value">${s.load}</div></div>
+                            <div class="stat-card"><h3>Uptime</h3><div class="value">${s.uptime}</div></div>
+                            <div class="stat-card"><h3>Memory</h3><div class="value">${s.memory}</div></div>
+                            <div class="stat-card"><h3>Disk Usage</h3><div class="value">${s.disk_usage}</div></div>
+                        `;
+                    }
+
+                    // Update services
+                    const serviceList = document.getElementById('serviceList');
+                    if (data.servers && data.servers[0] && data.servers[0].services) {
+                        if (data.servers[0].services.length > 0) {
+                            serviceList.innerHTML = data.servers[0].services.map(s => `
+                                <div class="service-item">
+                                    <div class="service-name">${s.name}</div>
+                                    <div class="service-status">
+                                        <span class="status-badge ${s.status === 'active' ? 'status-active' : 'status-inactive'}">${s.status}</span>
+                                    </div>
+                                    <div class="service-cpu">${s.cpu}% CPU</div>
+                                    <div class="service-mem">${s.mem}% MEM</div>
+                                </div>
+                            `).join('');
+                        } else {
+                            serviceList.innerHTML = '<div style="text-align: center; padding: 20px;">No services configured</div>';
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading data:', error);
+                });
+        }
+        setInterval(refreshData, 10000);
+        refreshData();
+    </script>
+</body>
+</html>
+HTML
+
+    chmod -R 755 "${DASHBOARD_DIR}"
+    print_substep "Dashboard files created"
+}
+
+create_dashboard_scripts() {
+    print_substep "Creating dashboard scripts..."
+
+    # Create dashboard updater script
+    cat > "${DASHBOARD_SCRIPT}" << EOF
+#!/bin/bash
+
+# =============================================================================
+# Service Monitor Dashboard Updater
+# =============================================================================
+# Author: Wael Isa
+# Website: https://www.wael.name
+# =============================================================================
+
+DASHBOARD_DIR="${DASHBOARD_DIR}"
+LOG_FILE="${LOG_FILE}"
+CONFIG_FILE="${CONFIG_FILE}"
+
+while true; do
+    # Get system info
+    HOSTNAME=\$(hostname)
+    UPTIME=\$(uptime | sed 's/.*up \([^,]*\),.*/\1/')
+    LOAD=\$(uptime | awk -F'load average:' '{print \$2}' | xargs)
+    CPU_CORES=\$(nproc)
+    MEMORY=\$(free -h | grep Mem | awk '{print \$3"/"\$2}')
+    DISK=\$(df -h / | awk 'NR==2 {print \$5}')
+    IOWAIT=\$(top -bn1 | grep "Cpu(s)" | awk '{print \$8}' | cut -d',' -f1)
+    IOWAIT=\${IOWAIT:-0}
+
+    # Get service status from config
+    SERVICES_JSON=""
+    FIRST=1
+
+    if [[ -f "\${CONFIG_FILE}" ]]; then
+        while IFS= read -r line; do
+            if [[ "\${line}" =~ MONITORED_SERVICES=\"(.*)\" ]]; then
+                IFS=' ' read -ra SERVICES <<< "\${BASH_REMATCH[1]}"
+                for SERVICE in "\${SERVICES[@]}"; do
+                    if [[ \${FIRST} -eq 1 ]]; then
+                        FIRST=0
+                    else
+                        SERVICES_JSON+=","
+                    fi
+
+                    STATUS=\$(systemctl is-active "\${SERVICE}" 2>/dev/null || echo "unknown")
+                    SERVICES_JSON+="{\"name\":\"\${SERVICE}\",\"status\":\"\${STATUS}\",\"cpu\":0,\"mem\":0}"
+                done
+                break
+            fi
+        done < "\${CONFIG_FILE}"
     fi
 
-    # Keep only last 5 backups
-    if [[ -d "${BACKUP_DIR}" ]]; then
-        cd "${BACKUP_DIR}" || return
-        ls -t | tail -n +6 | xargs -r rm -rf
-        cd - > /dev/null || return
-    fi
+    # Create JSON
+    cat > "\${DASHBOARD_DIR}/status.json" << JSON
+{
+    "last_update": "\$(date '+%Y-%m-%d %H:%M:%S')",
+    "version": "${SCRIPT_VERSION}",
+    "author": "${SCRIPT_AUTHOR}",
+    "website": "${SCRIPT_URL}",
+    "servers": [
+        {
+            "id": "local",
+            "hostname": "\${HOSTNAME}",
+            "uptime": "\${UPTIME}",
+            "load": "\${LOAD}",
+            "cpu_cores": \${CPU_CORES},
+            "memory": "\${MEMORY}",
+            "iowait": "\${IOWAIT}%",
+            "disk_usage": "\${DISK}",
+            "services": [\${SERVICES_JSON}]
+        }
+    ],
+    "alerts": []
+}
+JSON
+
+    sleep 30
+done
+EOF
+
+    chmod +x "${DASHBOARD_SCRIPT}"
+    print_substep "Dashboard scripts created"
+}
+
+create_dashboard_services() {
+    print_substep "Creating dashboard services..."
+
+    # Create HTTP server service
+    cat > "${DASHBOARD_HTTP_SERVICE}" << EOF
+[Unit]
+Description=Service Monitor HTTP Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=${DASHBOARD_DIR}
+ExecStart=/usr/bin/python3 -m http.server ${DEFAULT_DASHBOARD_PORT} --bind 0.0.0.0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Create updater service
+    cat > "${DASHBOARD_UPDATER_SERVICE}" << EOF
+[Unit]
+Description=Service Monitor Dashboard Updater
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=${DASHBOARD_SCRIPT}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Enable and start services
+    systemctl daemon-reload
+    systemctl enable service-monitor-http.service &> /dev/null
+    systemctl enable service-monitor-updater.service &> /dev/null
+    systemctl start service-monitor-http.service &> /dev/null
+    systemctl start service-monitor-updater.service &> /dev/null
+
+    print_substep "Dashboard services created and started"
 }
 
 # =============================================================================
@@ -1010,17 +1313,15 @@ create_monitor_script() {
 #!/bin/bash
 
 # =============================================================================
-# Service Load Monitor v2.2.2 - Core Script
+# Service Load Monitor - Core Script
 # =============================================================================
 # Author:  Wael Isa
-# Version: 2.2.2
-# Date:    February 18, 2026
 # Website: https://www.wael.name
 # =============================================================================
 
 # Configuration
-CONFIG_FILE="/etc/service-monitor/config-v2.2.2.conf"
-LOG_FILE="/var/log/service-load-monitor-v2.2.2.log"
+CONFIG_FILE="/etc/service-monitor/config.conf"
+LOG_FILE="/var/log/service-monitor.log"
 
 # Load configuration
 if [[ -f "${CONFIG_FILE}" ]]; then
@@ -1039,10 +1340,15 @@ log_message() {
 }
 
 # Main monitoring loop
-log_message "Service Load Monitor v2.2.2 started"
+log_message "Service Load Monitor started"
 
 while true; do
-    # Add your monitoring logic here
+    CURRENT_LOAD=$(uptime | awk -F'load average:' '{print $2}' | awk -F',' '{print $1}' | sed 's/ //g')
+
+    if (( $(echo "$CURRENT_LOAD > $LOAD_THRESHOLD" | bc -l 2>/dev/null) )); then
+        log_message "High load detected: $CURRENT_LOAD"
+    fi
+
     sleep "${CHECK_INTERVAL}"
 done
 EOF
@@ -1056,11 +1362,9 @@ create_config_file() {
 
     cat > "${CONFIG_FILE}" << EOF
 # =============================================================================
-# Service Load Monitor v2.2.2 - Configuration
+# Service Load Monitor - Configuration
 # =============================================================================
 # Author:  Wael Isa
-# Version: 2.2.2
-# Date:    February 18, 2026
 # Website: https://www.wael.name
 # =============================================================================
 
@@ -1075,7 +1379,7 @@ MONITORED_SERVICES="ssh.service cron.service"
 
 # Dashboard settings
 ENABLE_DASHBOARD="yes"
-DASHBOARD_PORT=8080
+DASHBOARD_PORT=${DEFAULT_DASHBOARD_PORT}
 
 # Logging
 LOG_FILE="${LOG_FILE}"
@@ -1099,12 +1403,12 @@ install_monitor() {
     print_banner
 
     echo -e "${WHITE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${WHITE}║         INSTALLATION WIZARD - v2.2.2 Ultimate              ║${NC}"
+    echo -e "${WHITE}║         INSTALLATION WIZARD - v2.2.2 Complete              ║${NC}"
     echo -e "${WHITE}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     # Step 1: Check sudo
-    local total_steps=7
+    local total_steps=9
     local current_step=1
 
     print_step $current_step $total_steps "Checking sudo access"
@@ -1127,21 +1431,25 @@ install_monitor() {
 
     echo -e "  Distribution: ${distro}"
 
-# Display cloud info only if it's valid (not HTML)
-if [[ "${cloud}" != "${CLOUD_NONE}" ]]; then
-    echo -e "  Cloud Platform: ${cloud}"
-    # Only show details if they don't contain HTML
-    if [[ -n "${cloud_details}" ]] && [[ ! "${cloud_details}" =~ \<html ]]; then
-        echo -e "  Details: ${cloud_details}"
+    if [[ "${cloud}" != "${CLOUD_NONE}" ]]; then
+        echo -e "  Cloud Platform: ${cloud}"
+        if [[ -n "${cloud_details}" ]] && [[ ! "${cloud_details}" =~ \<html ]]; then
+            echo -e "  Details: ${cloud_details}"
+        fi
+    else
+        echo -e "  Cloud Platform: None detected"
     fi
-else
-    echo -e "  Cloud Platform: None detected"
-fi
 
-echo -e "  Architecture: $(uname -m)"
-print_success "System detection complete"
+    echo -e "  Architecture: $(uname -m)"
+    print_success "System detection complete"
 
-    # Step 3: Check existing installation
+    # Step 3: Clean up old versioned files
+    current_step=$((current_step + 1))
+    print_step $current_step $total_steps "Cleaning up old versioned files"
+    cleanup_old_versioned_files
+    print_success "Cleanup complete"
+
+    # Step 4: Check existing installation
     current_step=$((current_step + 1))
     print_step $current_step $total_steps "Checking for existing installation"
 
@@ -1193,18 +1501,17 @@ print_success "System detection complete"
                 ;;
         esac
     elif [[ "${has_files}" == "true" ]]; then
-        print_info "Found incomplete previous installation"
-        echo -e "${YELLOW}Do you want to backup and migrate? (y/N)${NC}"
+        print_info "Found existing installation files"
+        echo -e "${YELLOW}Do you want to backup and proceed? (y/N)${NC}"
         read -p "> " do_migrate
         if [[ "${do_migrate}" =~ ^[Yy]$ ]]; then
             local backup_id
-            backup_id=$(backup_existing "pre-migration")
+            backup_id=$(backup_existing "pre-install")
             print_success "Backup created: ${backup_id}"
-            migrate_configuration
         fi
     fi
 
-    # Step 4: Check and install dependencies
+    # Step 5: Check and install dependencies
     current_step=$((current_step + 1))
     print_step $current_step $total_steps "Checking and installing dependencies"
 
@@ -1214,9 +1521,9 @@ print_success "System detection complete"
     fi
     print_success "Dependencies satisfied"
 
-    # Step 5: Create directories and files
+    # Step 6: Create directories
     current_step=$((current_step + 1))
-    print_step $current_step $total_steps "Creating installation files"
+    print_step $current_step $total_steps "Creating directories"
 
     mkdir -p "${CONFIG_BASE_DIR}"
     mkdir -p "${SNAPSHOT_DIR}"
@@ -1225,18 +1532,34 @@ print_success "System detection complete"
     mkdir -p "${LIB_BASE_DIR}/clients"
     mkdir -p "${BACKUP_DIR}"
 
+    print_success "Directories created"
+
+    # Step 7: Create monitor files
+    current_step=$((current_step + 1))
+    print_step $current_step $total_steps "Creating monitor files"
+
     create_monitor_script
     create_config_file
 
-    print_success "Installation files created"
+    print_success "Monitor files created"
 
-    # Step 6: Create systemd service
+    # Step 8: Create dashboard
     current_step=$((current_step + 1))
-    print_step $current_step $total_steps "Creating systemd service"
+    print_step $current_step $total_steps "Creating web dashboard"
+
+    create_dashboard_files
+    create_dashboard_scripts
+    create_dashboard_services
+
+    print_success "Dashboard created and started"
+
+    # Step 9: Create main service
+    current_step=$((current_step + 1))
+    print_step $current_step $total_steps "Creating main service"
 
     cat > "${SERVICE_FILE}" << EOF
 [Unit]
-Description=Service Load Monitor v2.2.2 by Wael Isa
+Description=Service Load Monitor by Wael Isa
 After=network.target
 Wants=network.target
 
@@ -1249,7 +1572,7 @@ User=root
 Group=root
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=service-monitor-v2.2.2
+SyslogIdentifier=service-monitor
 
 # Security hardening
 NoNewPrivileges=yes
@@ -1258,114 +1581,98 @@ ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=${LOG_BASE_DIR} ${CONFIG_BASE_DIR} ${LIB_BASE_DIR}
 
-# Resource limits
+# Resource limits - modern syntax
 CPUQuota=50%
-MemoryLimit=500M
+MemoryMax=500M
+MemoryHigh=400M
+TasksMax=100
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable service-monitor-v2.2.2.service &> /dev/null
-    print_success "Service created and enabled"
-
-    # Step 7: Start service
-    current_step=$((current_step + 1))
-    print_step $current_step $total_steps "Starting service"
+    systemctl enable service-monitor.service &> /dev/null
 
     echo ""
-    echo -e "${YELLOW}Select startup mode:${NC}"
-    echo "1) Normal mode - Full monitoring"
-    echo "2) Test mode - Dry run (no changes)"
-    echo "3) Don't start now"
-    read -p "Select option [1-3]: " start_mode
+    echo -e "${YELLOW}Select startup mode for main monitor:${NC}"
+    echo "1) Start now"
+    echo "2) Don't start now"
+    read -p "Select option [1-2]: " start_mode
 
-    case "${start_mode}" in
-        1)
-            systemctl start service-monitor-v2.2.2.service
-            print_success "Service started in NORMAL mode"
-            ;;
-        2)
-            sed -i 's/DRY_RUN="no"/DRY_RUN="yes"/' "${CONFIG_FILE}" 2>/dev/null || true
-            systemctl start service-monitor-v2.2.2.service
-            print_success "Service started in TEST mode"
-            ;;
-        3)
-            print_info "Service installed but not started"
-            print_info "Start manually: systemctl start service-monitor-v2.2.2.service"
-            ;;
-    esac
+    if [[ "${start_mode}" == "1" ]]; then
+        systemctl start service-monitor.service
+        print_success "Main service started"
+    else
+        print_info "Main service installed but not started"
+        print_info "Start manually: systemctl start service-monitor.service"
+    fi
 
     # Save version
     echo "${SCRIPT_VERSION}" > "${VERSION_FILE}"
 
-    # Cleanup old files if this was an update
-    if [[ -n "${old_ver}" ]] || [[ "${has_files}" == "true" ]]; then
-        cleanup_old_files
-    fi
-
-    # Final success message with cloud instructions
+    # Final success message
     echo ""
     print_success "INSTALLATION COMPLETE!"
     echo ""
 
-    # Show dashboard URL if enabled
-    if [[ -f "${CONFIG_FILE}" ]] && grep -q "ENABLE_DASHBOARD=\"yes\"" "${CONFIG_FILE}"; then
-        local port
-        port=$(grep "DASHBOARD_PORT" "${CONFIG_FILE}" 2>/dev/null | cut -d= -f2 | tr -d '"')
-        port=${port:-8080}
+    # Show dashboard URL
+    local ip
+    ip=$(hostname -I | awk '{print $1}')
 
-        local ip
-        ip=$(hostname -I | awk '{print $1}')
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${WHITE}                    DASHBOARD ACCESS${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  Local URL:  ${GREEN}http://localhost:${DEFAULT_DASHBOARD_PORT}/${NC}"
+    echo -e "  Network URL: ${GREEN}http://${ip}:${DEFAULT_DASHBOARD_PORT}/${NC}"
+    echo ""
 
-        echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-        echo -e "${WHITE}                    DASHBOARD ACCESS${NC}"
-        echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    # Cloud-specific warnings
+    if [[ "${cloud}" != "${CLOUD_NONE}" ]]; then
+        echo -e "${RED}⚠️  CLOUD PLATFORM DETECTED: ${cloud}${NC}"
+        echo -e "${YELLOW}IMPORTANT: You must also open port ${DEFAULT_DASHBOARD_PORT} in your cloud firewall:${NC}"
         echo ""
-        echo -e "  Local URL:  ${GREEN}http://localhost:${port}/${NC}"
-        echo -e "  Network URL: ${GREEN}http://${ip}:${port}/${NC}"
-        echo ""
 
-        # Cloud-specific warnings
-        if [[ "${cloud}" != "${CLOUD_NONE}" ]]; then
-            echo -e "${RED}⚠️  CLOUD PLATFORM DETECTED: ${cloud}${NC}"
-            echo -e "${YELLOW}IMPORTANT: You must also open port ${port} in your cloud firewall:${NC}"
-            echo ""
-
-            case "${cloud}" in
-                "${CLOUD_AWS}")
-                    echo "  • AWS Console → EC2 → Security Groups"
-                    echo "  • Edit inbound rules → Add rule"
-                    echo "  • Custom TCP, Port ${port}, Source 0.0.0.0/0"
-                    ;;
-                "${CLOUD_GCP}")
-                    echo "  • GCP Console → VPC Network → Firewall"
-                    echo "  • Create firewall rule → Allow TCP:${port}"
-                    ;;
-                "${CLOUD_AZURE}")
-                    echo "  • Azure Portal → Network Security Group"
-                    echo "  • Add inbound security rule → Port ${port}"
-                    ;;
-                "${CLOUD_ORACLE}")
-                    echo "  • OCI Console → Networking → Security Lists"
-                    echo "  • Add ingress rule → Port ${port}"
-                    ;;
-            esac
-            echo ""
-        fi
-
-        echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+        case "${cloud}" in
+            "${CLOUD_AWS}")
+                echo "  • AWS Console → EC2 → Security Groups"
+                echo "  • Edit inbound rules → Add rule"
+                echo "  • Custom TCP, Port ${DEFAULT_DASHBOARD_PORT}, Source 0.0.0.0/0"
+                ;;
+            "${CLOUD_GCP}")
+                echo "  • GCP Console → VPC Network → Firewall"
+                echo "  • Create firewall rule → Allow TCP:${DEFAULT_DASHBOARD_PORT}"
+                ;;
+            "${CLOUD_AZURE}")
+                echo "  • Azure Portal → Network Security Group"
+                echo "  • Add inbound security rule → Port ${DEFAULT_DASHBOARD_PORT}"
+                ;;
+            "${CLOUD_ORACLE}")
+                echo "  • OCI Console → Networking → Security Lists"
+                echo "  • Add ingress rule → Port ${DEFAULT_DASHBOARD_PORT}"
+                ;;
+        esac
         echo ""
     fi
 
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+
     # Summary
     echo -e "${WHITE}Installation Summary:${NC}"
-    echo "  • Version: ${SCRIPT_VERSION}"
-    echo "  • Location: ${BASE_DIR}"
+    echo "  • Version: ${SCRIPT_VERSION} (only in header)"
+    echo "  • Monitor Service: ${GREEN}service-monitor.service${NC}"
+    echo "  • HTTP Server: ${GREEN}service-monitor-http.service${NC} (port ${DEFAULT_DASHBOARD_PORT})"
+    echo "  • Updater Service: ${GREEN}service-monitor-updater.service${NC}"
     echo "  • Config: ${CONFIG_FILE}"
     echo "  • Logs: ${LOG_FILE}"
-    echo "  • Service: service-monitor-v2.2.2.service"
+    echo "  • Dashboard: ${DASHBOARD_DIR}"
+    echo ""
+    echo -e "${WHITE}Commands:${NC}"
+    echo "  • Check status: ${GREEN}systemctl status service-monitor.service${NC}"
+    echo "  • View logs: ${GREEN}tail -f ${LOG_FILE}${NC}"
+    echo "  • Edit config: ${GREEN}nano ${CONFIG_FILE}${NC}"
     echo ""
     echo -e "${GREEN}Thank you for using Service Load Monitor!${NC}"
     echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}"
@@ -1380,7 +1687,7 @@ remove_monitor() {
     print_banner
 
     echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║              REMOVAL WIZARD - v2.2.2                       ║${NC}"
+    echo -e "${RED}║              REMOVAL WIZARD                                ║${NC}"
     echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1419,27 +1726,27 @@ remove_monitor() {
         backup_existing "pre-removal"
     fi
 
-    # Stop and disable services
+    # Stop and disable all services
     print_info "Stopping services..."
-    systemctl stop service-monitor-v2.2.2.service 2>/dev/null
     systemctl stop service-monitor.service 2>/dev/null
-    systemctl stop service-monitor-dashboard.service 2>/dev/null
+    systemctl stop service-monitor-http.service 2>/dev/null
+    systemctl stop service-monitor-updater.service 2>/dev/null
 
     print_info "Disabling services..."
-    systemctl disable service-monitor-v2.2.2.service 2>/dev/null
     systemctl disable service-monitor.service 2>/dev/null
-    systemctl disable service-monitor-dashboard.service 2>/dev/null
+    systemctl disable service-monitor-http.service 2>/dev/null
+    systemctl disable service-monitor-updater.service 2>/dev/null
 
     # Remove files
     print_info "Removing files..."
     rm -f "${MONITOR_SCRIPT}"
-    rm -f "${MONITOR_SCRIPT_LEGACY}"
     rm -f "${SERVICE_FILE}"
-    rm -f "${SERVICE_FILE_LEGACY}"
     rm -f "${DASHBOARD_SCRIPT}"
     rm -f "${CLIENT_SCRIPT}"
     rm -f "${UPDATE_SCRIPT}"
     rm -f "${LOGROTATE_FILE}"
+    rm -f "${DASHBOARD_HTTP_SERVICE}"
+    rm -f "${DASHBOARD_UPDATER_SERVICE}"
 
     # Ask about configuration and data
     echo ""
@@ -1450,12 +1757,13 @@ remove_monitor() {
         rm -rf "${CONFIG_BASE_DIR}"
         rm -rf "${LIB_BASE_DIR}"
         rm -rf "${DASHBOARD_DIR}"
-        rm -f "${LOG_FILE}" "${LOG_FILE_LEGACY}"*
+        rm -f "${LOG_FILE}"*
         rm -rf "${SNAPSHOT_DIR}"
+        rm -f "${VERSION_FILE}"
         print_info "Configuration and data removed"
     else
         print_info "Configuration kept at: ${CONFIG_BASE_DIR}"
-        print_info "Logs kept at: ${LOG_BASE_DIR}"
+        print_info "Logs kept at: ${LOG_FILE}"
     fi
 
     # Reload systemd
@@ -1468,7 +1776,6 @@ remove_monitor() {
 # STATUS FUNCTIONS
 # =============================================================================
 
-# Function to show status (clean version)
 show_status() {
     print_banner
 
@@ -1503,14 +1810,23 @@ show_status() {
 
     # Service status
     echo -e "${WHITE}Service Status:${NC}"
-    if systemctl is-active --quiet service-monitor-v2.2.2.service; then
+
+    if systemctl is-active --quiet service-monitor.service; then
         echo -e "  • ${GREEN}●${NC} Monitor Service: Running"
     else
         echo -e "  • ${RED}○${NC} Monitor Service: Stopped"
     fi
 
-    if systemctl is-active --quiet service-monitor-dashboard.service 2>/dev/null; then
-        echo -e "  • ${GREEN}●${NC} Dashboard Service: Running"
+    if systemctl is-active --quiet service-monitor-http.service 2>/dev/null; then
+        echo -e "  • ${GREEN}●${NC} HTTP Server: Running"
+    else
+        echo -e "  • ${RED}○${NC} HTTP Server: Stopped"
+    fi
+
+    if systemctl is-active --quiet service-monitor-updater.service 2>/dev/null; then
+        echo -e "  • ${GREEN}●${NC} Updater Service: Running"
+    else
+        echo -e "  • ${RED}○${NC} Updater Service: Stopped"
     fi
 
     # Version info
