@@ -1,33 +1,30 @@
 #!/bin/bash
 
 # =============================================================================
-# Service Load Monitor - Installation & Management Script v3.0.4
+# Service Load Monitor - Installation & Management Script v3.0.5
 # =============================================================================
 # Author:  Wael Isa
-# Version: 3.0.4
+# Version: 3.0.5
 # Date:    February 18, 2026
 # Website: https://www.wael.name
 # =============================================================================
 # Description: Enterprise-grade service monitoring with DNS suite integration
 #              Pi-hole, Unbound, DNSCrypt-Proxy native support
 #
-# CRITICAL FIXES IN v3.0.4:
+# CRITICAL FIXES IN v3.0.5:
 # -------------------------
-# 1. FIXED: Installation output no longer appears in dashboard
-# 2. FIXED: All ANSI color codes completely removed from JSON
-# 3. FIXED: Service status now shows correctly (active/inactive)
-# 4. FIXED: Dashboard no longer shows installation messages
-# 5. FIXED: JSON now contains ONLY valid data, no terminal output
-# 6. FIXED: Added output redirection to prevent pollution
-# 7. FIXED: Proper service detection without debug messages
-# 8. FIXED: Clean JSON generation with no extra text
-# 9. FIXED: Updater script now runs silently
-# 10. FIXED: All echo statements in service functions are silenced
-# 11. FIXED: Color codes completely stripped from all data sources
-# 12. FIXED: Installation wizard output separated from monitoring data
-# 13. FIXED: Added missing detect_distro function
-# 14. FIXED: Added all required dependency functions
-# 15. RESTORED: Pi-hole statistics in dashboard (queries, blocked, percentage)
+# 1. FIXED: Atomic JSON writes using temp file + mv (prevents half-written JSON)
+# 2. FIXED: Python-based JSON escaping (handles all special characters)
+# 3. FIXED: Append-mode logging inside loop (bypasses redirection locks)
+# 4. FIXED: Proper log file creation with permissions
+# 5. FIXED: Shebang verification at script generation
+# 6. FIXED: Path verification in systemd services
+# 7. FIXED: Permission checks before writing
+# 8. FIXED: Better error handling with detailed logging
+# 9. FIXED: Service status verification with fallbacks
+# 10. FIXED: Pi-hole statistics with proper JSON formatting
+# 11. FIXED: All ANSI codes completely stripped from JSON
+# 12. FIXED: Installation output separated from monitoring data
 # =============================================================================
 
 # Color codes for better UI - ONLY used in installation wizard, never in JSON
@@ -42,7 +39,7 @@ NC='\033[0m' # No Color
 
 # Script information
 SCRIPT_NAME="Service Load Monitor"
-SCRIPT_VERSION="3.0.4"
+SCRIPT_VERSION="3.0.5"
 SCRIPT_AUTHOR="Wael Isa"
 SCRIPT_URL="https://www.wael.name"
 SCRIPT_DATE="February 18, 2026"
@@ -58,6 +55,7 @@ MONITOR_SCRIPT="${BASE_DIR}/service-monitor.sh"
 SERVICE_FILE="/etc/systemd/system/service-monitor.service"
 CONFIG_FILE="${CONFIG_BASE_DIR}/config.conf"
 LOG_FILE="${LOG_BASE_DIR}/service-monitor.log"
+UPDATER_LOG="${LOG_BASE_DIR}/service-monitor-updater.log"
 LOGROTATE_FILE="/etc/logrotate.d/service-monitor"
 SNAPSHOT_DIR="${LOG_BASE_DIR}/service-monitor-snapshots"
 PERF_DATA_DIR="${LIB_BASE_DIR}/perf"
@@ -300,19 +298,19 @@ command_exists() {
 }
 
 # =============================================================================
-# DASHBOARD FUNCTIONS - COMPLETELY SILENT, WITH PI-HOLE STATS
+# DASHBOARD FUNCTIONS - v3.0.5 WITH ATOMIC WRITES AND PYTHON JSON ESCAPING
 # =============================================================================
 
 create_dashboard_files() {
-    print_substep "Creating dashboard files..."
+    print_substep "Creating dashboard files v3.0.5..."
 
     mkdir -p "${DASHBOARD_DIR}"
 
-    # Create initial status.json with minimal data - NO COLORS, NO EXTRAS
+    # Create initial status.json with minimal data
     cat > "${DASHBOARD_DIR}/status.json" << EOF
 {
     "last_update": "$(date '+%Y-%m-%d %H:%M:%S')",
-    "version": "3.0.4",
+    "version": "3.0.5",
     "servers": [
         {
             "id": "local",
@@ -330,7 +328,7 @@ create_dashboard_files() {
 }
 EOF
 
-    # Create index.html with fixed JavaScript - INCLUDING PI-HOLE SECTION
+    # Create index.html with fixed JavaScript
     cat > "${DASHBOARD_DIR}/index.html" << 'HTML'
 <!DOCTYPE html>
 <html lang="en">
@@ -338,7 +336,7 @@ EOF
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="refresh" content="30">
-    <title>Service Monitor Dashboard v3.0.4 - Wael Isa</title>
+    <title>Service Monitor Dashboard v3.0.5 - Wael Isa</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -475,7 +473,7 @@ EOF
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔍 Service Load Monitor <span class="badge">v3.0.4</span></h1>
+            <h1>🔍 Service Load Monitor <span class="badge">v3.0.5</span></h1>
             <div class="author">by <a href="https://www.wael.name" target="_blank">Wael Isa</a></div>
             <div class="last-update" id="lastUpdate">Loading...</div>
         </div>
@@ -508,7 +506,7 @@ EOF
     </div>
 
     <div class="footer">
-        <p>© 2026 <a href="https://www.wael.name" target="_blank">Wael Isa</a> - Service Load Monitor v3.0.4</p>
+        <p>© 2026 <a href="https://www.wael.name" target="_blank">Wael Isa</a> - Service Load Monitor v3.0.5</p>
     </div>
 
     <script>
@@ -630,58 +628,41 @@ EOF
 HTML
 
     chmod -R 755 "${DASHBOARD_DIR}"
-    print_substep "Dashboard files created with Pi-hole stats restored"
+    print_substep "Dashboard files created"
 }
 
 create_dashboard_scripts() {
-    print_substep "Creating dashboard scripts..."
+    print_substep "Creating dashboard scripts v3.0.5..."
 
     cat > "${DASHBOARD_SCRIPT}" << 'EOF'
 #!/bin/bash
-
-# =============================================================================
-# Service Monitor Dashboard Updater v3.0.4 - COMPLETELY SILENT
+# Service Monitor Dashboard Updater v3.0.5
 # =============================================================================
 # This script runs in the background and updates status.json
-# ALL output is redirected to prevent pollution of JSON data
+# Uses atomic writes and Python JSON escaping for reliability
 # =============================================================================
-
-# Redirect all output to log file - CRITICAL: Prevents output in JSON
-exec > /var/log/service-monitor-updater.log 2>&1
 
 DASHBOARD_DIR="/var/www/html/service-monitor"
 CONFIG_FILE="/etc/service-monitor/config.conf"
+LOG_FILE="/var/log/service-monitor-updater.log"
 
-# Function to escape JSON strings
+# Ensure log exists and is writable
+touch "$LOG_FILE" 2>/dev/null || {
+    echo "CRITICAL: Cannot create log file $LOG_FILE"
+    exit 1
+}
+
+# Function to log messages with timestamps
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+}
+
+# Function to escape JSON strings using Python (handles all special chars)
 json_escape() {
-    echo -n "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/'"$(printf '\n')"'/\\n/g'
+    python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null | sed 's/^"//;s/"$//'
 }
 
-# Function to get Pi-hole stats
-get_pihole_stats() {
-    local status="inactive"
-    local queries_today=0
-    local blocked_today=0
-
-    if command -v pihole &>/dev/null || [[ -f "/usr/local/bin/pihole" ]] || [[ -f "/usr/bin/pihole" ]]; then
-        if systemctl is-active --quiet pihole-FTL.service 2>/dev/null; then
-            status="active"
-
-            # Try to get query counts from logs
-            if [[ -f "/var/log/pihole.log" ]]; then
-                queries_today=$(grep -c "query" /var/log/pihole.log 2>/dev/null || echo 0)
-                blocked_today=$(grep -c "gravity blocked" /var/log/pihole.log 2>/dev/null || echo 0)
-            elif [[ -f "/var/log/pihole/pihole.log" ]]; then
-                queries_today=$(grep -c "query" /var/log/pihole/pihole.log 2>/dev/null || echo 0)
-                blocked_today=$(grep -c "gravity blocked" /var/log/pihole/pihole.log 2>/dev/null || echo 0)
-            fi
-        fi
-    fi
-
-    echo "{\"status\":\"$status\",\"queries_today\":$queries_today,\"blocked_today\":$blocked_today}"
-}
-
-# Function to get service status - SILENT, no output
+# Function to get service status
 get_service_status() {
     local service="$1"
     local status="inactive"
@@ -715,9 +696,53 @@ get_service_status() {
     echo "$status|$cpu|$mem"
 }
 
-# Main loop - SILENT operation
+# Function to get Pi-hole stats
+get_pihole_stats() {
+    local status="inactive"
+    local queries_today=0
+    local blocked_today=0
+
+    if command -v pihole &>/dev/null || [[ -f "/usr/local/bin/pihole" ]] || [[ -f "/usr/bin/pihole" ]]; then
+        if systemctl is-active --quiet pihole-FTL.service 2>/dev/null; then
+            status="active"
+
+            # Try to get query counts from logs
+            if [[ -f "/var/log/pihole.log" ]]; then
+                queries_today=$(grep -c "query" /var/log/pihole.log 2>/dev/null || echo 0)
+                blocked_today=$(grep -c "gravity blocked" /var/log/pihole.log 2>/dev/null || echo 0)
+            elif [[ -f "/var/log/pihole/pihole.log" ]]; then
+                queries_today=$(grep -c "query" /var/log/pihole/pihole.log 2>/dev/null || echo 0)
+                blocked_today=$(grep -c "gravity blocked" /var/log/pihole/pihole.log 2>/dev/null || echo 0)
+            fi
+        fi
+    fi
+
+    echo "{\"status\":\"$status\",\"queries_today\":$queries_today,\"blocked_today\":$blocked_today}"
+}
+
+# Start logging
+log "=== Service Monitor Updater v3.0.5 Started ==="
+log "PID: $$"
+log "Dashboard directory: $DASHBOARD_DIR"
+log "Config file: $CONFIG_FILE"
+
+# Verify dashboard directory exists
+if [[ ! -d "$DASHBOARD_DIR" ]]; then
+    log "ERROR: Dashboard directory $DASHBOARD_DIR does not exist"
+    mkdir -p "$DASHBOARD_DIR" 2>/dev/null || {
+        log "CRITICAL: Cannot create dashboard directory"
+        exit 1
+    }
+    log "Created dashboard directory"
+fi
+
+# Main loop
+loop_count=0
 while true; do
-    # Get system info - SILENT, with defaults
+    loop_count=$((loop_count + 1))
+    log "=== Loop $loop_count starting ==="
+
+    # Get system info with error handling
     HOSTNAME=$(hostname 2>/dev/null || echo "localhost")
     UPTIME=$(uptime 2>/dev/null | sed 's/.*up \([^,]*\),.*/\1/' || echo "0")
     LOAD=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | xargs || echo "0.00")
@@ -725,10 +750,13 @@ while true; do
     MEMORY=$(free -h 2>/dev/null | grep Mem | awk '{print $3"/"$2}' || echo "0/0")
     DISK=$(df -h / 2>/dev/null | awk 'NR==2 {print $5}' || echo "0%")
 
+    log "System: hostname=$HOSTNAME, load=$LOAD, memory=$MEMORY"
+
     # Get Pi-hole stats
     PIHOLE_STATS=$(get_pihole_stats)
+    log "Pi-hole stats: $PIHOLE_STATS"
 
-    # Check DNS services - SILENT
+    # Check DNS services
     DNS_SERVICES=("pihole-FTL.service" "unbound.service" "dnscrypt-proxy.service" "dnsmasq.service" "named.service")
     DNS_JSON=""
     FIRST=1
@@ -736,6 +764,7 @@ while true; do
     for SERVICE in "${DNS_SERVICES[@]}"; do
         if systemctl list-unit-files 2>/dev/null | grep -q "$SERVICE" || [[ -f "/etc/systemd/system/$SERVICE" ]]; then
             IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
+            log "DNS service $SERVICE: status=$STATUS, cpu=$CPU, mem=$MEM"
 
             if [[ $FIRST -eq 1 ]]; then
                 FIRST=0
@@ -743,15 +772,18 @@ while true; do
                 DNS_JSON+=","
             fi
 
-            DNS_JSON+="{\"name\":\"$(json_escape "$SERVICE")\",\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
+            # Escape service name
+            ESCAPED_NAME=$(echo -n "$SERVICE" | json_escape)
+            DNS_JSON+="{\"name\":$ESCAPED_NAME,\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
         fi
     done
 
-    # Get monitored services from config - SILENT
+    # Get monitored services from config
     SERVICES_JSON=""
     FIRST=1
 
     if [[ -f "$CONFIG_FILE" ]]; then
+        log "Reading config from $CONFIG_FILE"
         while IFS= read -r line; do
             if [[ "$line" =~ MONITORED_SERVICES=\"(.*)\" ]]; then
                 IFS=' ' read -ra SERVICES <<< "${BASH_REMATCH[1]}"
@@ -760,6 +792,7 @@ while true; do
                     [[ " ${DNS_SERVICES[@]} " =~ " $SERVICE " ]] && continue
 
                     IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
+                    log "Monitored service $SERVICE: status=$STATUS, cpu=$CPU, mem=$MEM"
 
                     if [[ $FIRST -eq 1 ]]; then
                         FIRST=0
@@ -767,27 +800,40 @@ while true; do
                         SERVICES_JSON+=","
                     fi
 
-                    SERVICES_JSON+="{\"name\":\"$(json_escape "$SERVICE")\",\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
+                    ESCAPED_NAME=$(echo -n "$SERVICE" | json_escape)
+                    SERVICES_JSON+="{\"name\":$ESCAPED_NAME,\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
                 done
                 break
             fi
         done < "$CONFIG_FILE"
+    else
+        log "WARNING: Config file $CONFIG_FILE not found"
     fi
 
-    # Write JSON - SILENT, no echo to stdout
-    cat > "$DASHBOARD_DIR/status.json" << JSON
+    # Escape string values for JSON
+    ESCAPED_HOSTNAME=$(echo -n "$HOSTNAME" | json_escape)
+    ESCAPED_UPTIME=$(echo -n "$UPTIME" | json_escape)
+    ESCAPED_LOAD=$(echo -n "$LOAD" | json_escape)
+    ESCAPED_MEMORY=$(echo -n "$MEMORY" | json_escape)
+    ESCAPED_DISK=$(echo -n "$DISK" | json_escape)
+
+    # Create JSON in temporary file first (atomic write)
+    TMP_FILE="${DASHBOARD_DIR}/status.json.tmp.$$"
+    FINAL_FILE="${DASHBOARD_DIR}/status.json"
+
+    cat > "$TMP_FILE" << JSON
 {
     "last_update": "$(date '+%Y-%m-%d %H:%M:%S')",
-    "version": "3.0.4",
+    "version": "3.0.5",
     "servers": [
         {
             "id": "local",
-            "hostname": "$(json_escape "$HOSTNAME")",
-            "uptime": "$(json_escape "$UPTIME")",
-            "load": "$(json_escape "$LOAD")",
+            "hostname": $ESCAPED_HOSTNAME,
+            "uptime": $ESCAPED_UPTIME,
+            "load": $ESCAPED_LOAD,
             "cpu_cores": $CPU_CORES,
-            "memory": "$(json_escape "$MEMORY")",
-            "disk_usage": "$(json_escape "$DISK")",
+            "memory": $ESCAPED_MEMORY,
+            "disk_usage": $ESCAPED_DISK,
             "services": [$SERVICES_JSON],
             "dns_services": [$DNS_JSON]
         }
@@ -796,20 +842,42 @@ while true; do
 }
 JSON
 
+    # Verify JSON is valid
+    if python3 -m json.tool "$TMP_FILE" > /dev/null 2>&1; then
+        # Atomic move
+        mv "$TMP_FILE" "$FINAL_FILE"
+        log "Successfully wrote valid JSON to $FINAL_FILE"
+        chmod 644 "$FINAL_FILE"
+    else
+        log "ERROR: Generated invalid JSON, keeping previous version"
+        rm -f "$TMP_FILE"
+    fi
+
+    log "=== Loop $loop_count completed, sleeping 30 seconds ==="
     sleep 30
 done
 EOF
 
-    chmod +x "${DASHBOARD_SCRIPT}"
-    print_substep "Dashboard scripts created - SILENT mode with Pi-hole stats"
+    # Ensure the script has proper shebang and permissions
+    if [[ -f "${DASHBOARD_SCRIPT}" ]]; then
+        chmod 755 "${DASHBOARD_SCRIPT}"
+        # Verify first line is #!/bin/bash
+        if ! head -1 "${DASHBOARD_SCRIPT}" | grep -q "^#!.*bash"; then
+            sed -i '1s/^/#!\/bin\/bash\n/' "${DASHBOARD_SCRIPT}"
+        fi
+        print_substep "Dashboard script created with proper permissions"
+    else
+        print_error "Failed to create dashboard script"
+    fi
 }
 
 create_dashboard_services() {
-    print_substep "Creating dashboard services..."
+    print_substep "Creating dashboard services v3.0.5..."
 
+    # Create HTTP server service
     cat > "${DASHBOARD_HTTP_SERVICE}" << EOF
 [Unit]
-Description=Service Monitor HTTP Server v3.0.4
+Description=Service Monitor HTTP Server v3.0.5
 After=network.target
 
 [Service]
@@ -827,10 +895,12 @@ StandardError=null
 WantedBy=multi-user.target
 EOF
 
+    # Create updater service
     cat > "${DASHBOARD_UPDATER_SERVICE}" << EOF
 [Unit]
-Description=Service Monitor Dashboard Updater v3.0.4
+Description=Service Monitor Dashboard Updater v3.0.5
 After=network.target
+Wants=network.target
 
 [Service]
 Type=simple
@@ -847,13 +917,27 @@ Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable service-monitor-http.service &> /dev/null
-    systemctl enable service-monitor-updater.service &> /dev/null
-    systemctl restart service-monitor-http.service &> /dev/null
-    systemctl restart service-monitor-updater.service &> /dev/null
+    # Verify service files exist
+    if [[ -f "${DASHBOARD_HTTP_SERVICE}" ]] && [[ -f "${DASHBOARD_UPDATER_SERVICE}" ]]; then
+        systemctl daemon-reload
+        systemctl enable service-monitor-http.service &> /dev/null
+        systemctl enable service-monitor-updater.service &> /dev/null
+        systemctl restart service-monitor-http.service &> /dev/null
+        systemctl restart service-monitor-updater.service &> /dev/null
 
-    print_substep "Dashboard services created and started"
+        # Verify services are running
+        sleep 2
+        if systemctl is-active --quiet service-monitor-updater.service; then
+            print_substep "Updater service is running"
+        else
+            print_warning "Updater service failed to start, checking logs..."
+            journalctl -u service-monitor-updater.service -n 10 --no-pager
+        fi
+    else
+        print_error "Failed to create service files"
+    fi
+
+    print_substep "Dashboard services created"
 }
 
 # =============================================================================
@@ -865,7 +949,7 @@ create_monitor_script() {
 #!/bin/bash
 
 # =============================================================================
-# Service Load Monitor - Core Script v3.0.4
+# Service Load Monitor - Core Script v3.0.5
 # =============================================================================
 
 CONFIG_FILE="/etc/service-monitor/config.conf"
@@ -882,7 +966,7 @@ log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
 }
 
-log_message "Service Load Monitor v3.0.4 started"
+log_message "Service Load Monitor v3.0.5 started"
 
 while true; do
     CURRENT_LOAD=$(uptime | awk -F'load average:' '{print $2}' | awk -F',' '{print $1}' | sed 's/ //g' 2>/dev/null || echo "0")
@@ -914,7 +998,7 @@ create_config_file() {
     local MONITORED="${dns_list} ${common_services}"
 
     cat > "${CONFIG_FILE}" << EOF
-# Service Load Monitor Configuration v3.0.4
+# Service Load Monitor Configuration v3.0.5
 CHECK_INTERVAL=30
 LOAD_THRESHOLD=5.0
 CPU_THRESHOLD=70
@@ -936,7 +1020,7 @@ install_monitor() {
     print_banner
 
     echo -e "${WHITE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${WHITE}║           INSTALLATION WIZARD - v3.0.4                     ║${NC}"
+    echo -e "${WHITE}║           INSTALLATION WIZARD - v3.0.5                     ║${NC}"
     echo -e "${WHITE}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -985,6 +1069,9 @@ install_monitor() {
     # Step 4: Create directories
     print_step $current_step $total_steps "Creating directories"
     mkdir -p "${CONFIG_BASE_DIR}" "${SNAPSHOT_DIR}" "${PERF_DATA_DIR}" "${DASHBOARD_DIR}" "${BACKUP_DIR}" "$(dirname "${LOG_FILE}")"
+    # Create updater log file with proper permissions
+    touch "${UPDATER_LOG}" 2>/dev/null
+    chmod 644 "${UPDATER_LOG}" 2>/dev/null
     print_success "Directories created"
     current_step=$((current_step + 1))
 
@@ -1000,14 +1087,14 @@ install_monitor() {
     create_dashboard_files
     create_dashboard_scripts
     create_dashboard_services
-    print_success "Dashboard created with Pi-hole stats"
+    print_success "Dashboard created with atomic writes and Python JSON escaping"
     current_step=$((current_step + 1))
 
     # Step 7: Create main service
     print_step $current_step $total_steps "Creating main service"
     cat > "${SERVICE_FILE}" << EOF
 [Unit]
-Description=Service Load Monitor v3.0.4
+Description=Service Load Monitor v3.0.5
 After=network.target
 
 [Service]
@@ -1060,11 +1147,16 @@ EOF
     echo -e "  • Updater Service: ${GREEN}service-monitor-updater.service${NC}"
     echo "  • Config: ${CONFIG_FILE}"
     echo "  • Logs: ${LOG_FILE}"
+    echo "  • Updater Log: ${UPDATER_LOG}"
     echo "  • Dashboard: ${DASHBOARD_DIR}"
     echo "  • DNS Services: ${#dns_services[@]}"
     echo "  • Pi-hole Stats: Enabled"
     echo ""
-    echo -e "${GREEN}Thank you for using Service Load Monitor v3.0.4!${NC}"
+    echo -e "${WHITE}Commands:${NC}"
+    echo -e "  • Check updater logs: ${GREEN}tail -f ${UPDATER_LOG}${NC}"
+    echo -e "  • Check service status: ${GREEN}systemctl status service-monitor-updater.service${NC}"
+    echo ""
+    echo -e "${GREEN}Thank you for using Service Load Monitor v3.0.5!${NC}"
     echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}"
     echo ""
 }
@@ -1076,7 +1168,7 @@ EOF
 remove_monitor() {
     print_banner
     echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║              REMOVAL WIZARD - v3.0.4                       ║${NC}"
+    echo -e "${RED}║              REMOVAL WIZARD - v3.0.5                       ║${NC}"
     echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1114,7 +1206,7 @@ remove_monitor() {
 
     if [[ "${remove_data}" =~ ^[Yy]$ ]]; then
         rm -rf "${CONFIG_BASE_DIR}" "${LIB_BASE_DIR}" "${DASHBOARD_DIR}"
-        rm -f "${LOG_FILE}"*
+        rm -f "${LOG_FILE}"* "${UPDATER_LOG}"*
         print_info "Configuration and data removed"
     else
         print_info "Configuration kept at: ${CONFIG_BASE_DIR}"
@@ -1131,7 +1223,7 @@ remove_monitor() {
 show_status() {
     print_banner
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${WHITE}                    SYSTEM STATUS - v3.0.4${NC}"
+    echo -e "${WHITE}                    SYSTEM STATUS - v3.0.5${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
@@ -1165,6 +1257,11 @@ show_status() {
 
     if systemctl is-active --quiet service-monitor-updater.service 2>/dev/null; then
         echo -e "  • ${GREEN}●${NC} Updater Service: Running"
+        # Show last few lines of updater log
+        if [[ -f "${UPDATER_LOG}" ]]; then
+            echo -e "  • Last updater log entries:"
+            tail -3 "${UPDATER_LOG}" 2>/dev/null | sed 's/^/    /'
+        fi
     else
         echo -e "  • ${RED}○${NC} Updater Service: Stopped"
     fi
@@ -1200,10 +1297,12 @@ show_status() {
 # =============================================================================
 
 show_logs() {
-    if [[ -f "${LOG_FILE}" ]]; then
+    if [[ -f "${UPDATER_LOG}" ]]; then
+        tail -f "${UPDATER_LOG}"
+    elif [[ -f "${LOG_FILE}" ]]; then
         tail -f "${LOG_FILE}"
     else
-        print_error "Log file not found: ${LOG_FILE}"
+        print_error "No log files found"
     fi
 }
 
@@ -1214,10 +1313,10 @@ show_logs() {
 print_banner() {
     clear
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${WHITE}           SERVICE LOAD MONITOR v3.0.4                   ${BLUE}║${NC}"
+    echo -e "${BLUE}║${WHITE}           SERVICE LOAD MONITOR v3.0.5                   ${BLUE}║${NC}"
     echo -e "${BLUE}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${BLUE}║${GREEN}  Author:  Wael Isa                                      ${BLUE}║${NC}"
-    echo -e "${BLUE}║${GREEN}  Version: 3.0.4 (SILENT Mode + Pi-hole Stats)          ${BLUE}║${NC}"
+    echo -e "${BLUE}║${GREEN}  Version: 3.0.5 (Atomic Writes + Python JSON)          ${BLUE}║${NC}"
     echo -e "${BLUE}║${GREEN}  Date:    February 18, 2026                             ${BLUE}║${NC}"
     echo -e "${BLUE}║${GREEN}  Website: https://www.wael.name                         ${BLUE}║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
@@ -1230,7 +1329,7 @@ print_banner() {
 
 show_features() {
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${WHITE}               FEATURE HIGHLIGHTS v3.0.4${NC}"
+    echo -e "${WHITE}               FEATURE HIGHLIGHTS v3.0.5${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo ""
     echo -e "${GREEN}🛡️  Pi-hole Integration${NC}"
@@ -1245,11 +1344,13 @@ show_features() {
     echo "  • dnsmasq"
     echo "  • BIND9"
     echo ""
-    echo -e "${GREEN}📊 SILENT Dashboard${NC}"
-    echo "  • No ANSI codes in JSON"
-    echo "  • No installation messages"
-    echo "  • Clean service display"
-    echo "  • Real CPU/MEM usage"
+    echo -e "${GREEN}📊 Advanced Dashboard Features${NC}"
+    echo "  • Atomic JSON writes (no half-written files)"
+    echo "  • Python-based JSON escaping (handles all special chars)"
+    echo "  • Detailed logging with timestamps"
+    echo "  • Automatic log rotation"
+    echo "  • Service status verification"
+    echo "  • Pi-hole statistics"
     echo ""
 }
 
@@ -1258,13 +1359,13 @@ show_features() {
 # =============================================================================
 
 show_help() {
-    echo "Service Load Monitor v3.0.4"
+    echo "Service Load Monitor v3.0.5"
     echo ""
     echo "Commands:"
     echo "  install     - Install or update"
     echo "  remove      - Remove the monitor"
     echo "  status      - Show service status"
-    echo "  logs        - Follow log output"
+    echo "  logs        - Follow updater log output"
     echo "  backup      - Create a backup"
     echo "  restore     - Restore from backup"
     echo "  version     - Show version"
@@ -1298,6 +1399,12 @@ backup_existing() {
 
     if [[ -f "${SERVICE_FILE}" ]]; then
         cp "${SERVICE_FILE}" "${backup_path}/" 2>/dev/null
+    fi
+    if [[ -f "${DASHBOARD_HTTP_SERVICE}" ]]; then
+        cp "${DASHBOARD_HTTP_SERVICE}" "${backup_path}/" 2>/dev/null
+    fi
+    if [[ -f "${DASHBOARD_UPDATER_SERVICE}" ]]; then
+        cp "${DASHBOARD_UPDATER_SERVICE}" "${backup_path}/" 2>/dev/null
     fi
 
     echo "${SCRIPT_VERSION}" > "${backup_path}/version.txt"
@@ -1418,7 +1525,7 @@ show_menu() {
     print_banner
     echo -e "${WHITE}Main Menu:${NC}"
     echo ""
-    echo "  1) Install/Update Monitor (v3.0.4)"
+    echo "  1) Install/Update Monitor (v3.0.5)"
     echo "  2) Remove Monitor"
     echo "  3) Show Status"
     echo "  4) View Logs"
@@ -1531,7 +1638,7 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             8)
-                echo -e "\n${GREEN}Thank you for using Service Load Monitor v3.0.4!${NC}"
+                echo -e "\n${GREEN}Thank you for using Service Load Monitor v3.0.5!${NC}"
                 echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}\n"
                 exit 0
                 ;;
