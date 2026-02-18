@@ -25,6 +25,8 @@
 # 10. FIXED: All echo statements in service functions are silenced
 # 11. FIXED: Color codes completely stripped from all data sources
 # 12. FIXED: Installation wizard output separated from monitoring data
+# 13. FIXED: Added missing detect_distro function
+# 14. FIXED: Added all required dependency functions
 # =============================================================================
 
 # Color codes for better UI - ONLY used in installation wizard, never in JSON
@@ -83,6 +85,13 @@ DNS_SERVICES=(
 # Default ports
 DEFAULT_DASHBOARD_PORT=8080
 
+# Cloud platform names
+CLOUD_AWS="AWS"
+CLOUD_GCP="GCP"
+CLOUD_AZURE="Azure"
+CLOUD_ORACLE="Oracle Cloud"
+CLOUD_NONE="none"
+
 # =============================================================================
 # UI HELPER FUNCTIONS - ONLY USED IN INSTALLATION, NEVER IN JSON
 # =============================================================================
@@ -105,6 +114,108 @@ print_success() {
 
 print_error() {
     echo -e "${RED}❌${NC} ${1}"
+}
+
+print_warning() {
+    echo -e "${RED}⚠${NC} ${1}"
+}
+
+# =============================================================================
+# SYSTEM DETECTION FUNCTIONS
+# =============================================================================
+
+detect_distro() {
+    local os=""
+    local ver=""
+
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        os="${NAME}"
+        ver="${VERSION_ID}"
+    elif type lsb_release >/dev/null 2>&1; then
+        os=$(lsb_release -si)
+        ver=$(lsb_release -sr)
+    elif [[ -f /etc/debian_version ]]; then
+        os="Debian"
+        ver=$(cat /etc/debian_version)
+    elif [[ -f /etc/redhat-release ]]; then
+        os="Red Hat"
+        ver=$(cat /etc/redhat-release | sed 's/.*release //;s/ .*//')
+    elif [[ -f /etc/arch-release ]]; then
+        os="Arch Linux"
+        ver="rolling"
+    elif [[ -f /etc/alpine-release ]]; then
+        os="Alpine"
+        ver=$(cat /etc/alpine-release)
+    else
+        os="Unknown"
+        ver="Unknown"
+    fi
+
+    echo "${os} ${ver}"
+}
+
+detect_cloud() {
+    local cloud="${CLOUD_NONE}"
+    local details=""
+    local response
+
+    # Check for AWS
+    response=$(curl -s --max-time 2 -f http://169.254.169.254/latest/meta-data/ 2>/dev/null)
+    if [[ $? -eq 0 ]] && [[ ! "${response}" =~ \<html ]]; then
+        cloud="${CLOUD_AWS}"
+        local instance_type
+        instance_type=$(curl -s --max-time 2 -f http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null)
+        if [[ -n "${instance_type}" ]] && [[ ! "${instance_type}" =~ \<html ]]; then
+            details="Instance Type: ${instance_type}"
+        fi
+        echo "${cloud}|${details}"
+        return
+    fi
+
+    # Check for GCP
+    response=$(curl -s --max-time 2 -f -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/ 2>/dev/null)
+    if [[ $? -eq 0 ]] && [[ ! "${response}" =~ \<html ]]; then
+        cloud="${CLOUD_GCP}"
+        local machine_type
+        machine_type=$(curl -s --max-time 2 -f -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/machine-type 2>/dev/null | awk -F/ '{print $NF}')
+        if [[ -n "${machine_type}" ]] && [[ ! "${machine_type}" =~ \<html ]]; then
+            details="Machine Type: ${machine_type}"
+        fi
+        echo "${cloud}|${details}"
+        return
+    fi
+
+    # Check for Azure
+    response=$(curl -s --max-time 2 -f -H "Metadata: true" "http://169.254.169.254/metadata/instance?api-version=2017-08-01" 2>/dev/null)
+    if [[ $? -eq 0 ]] && [[ ! "${response}" =~ \<html ]]; then
+        cloud="${CLOUD_AZURE}"
+        local vm_size
+        vm_size=$(curl -s --max-time 2 -f -H "Metadata: true" "http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2021-02-01" 2>/dev/null)
+        if [[ -z "${vm_size}" ]] || [[ "${vm_size}" =~ \<html ]]; then
+            vm_size=$(curl -s --max-time 2 -f -H "Metadata: true" "http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2017-08-01" 2>/dev/null)
+        fi
+        if [[ -n "${vm_size}" ]] && [[ ! "${vm_size}" =~ \<html ]]; then
+            details="VM Size: ${vm_size}"
+        fi
+        echo "${cloud}|${details}"
+        return
+    fi
+
+    # Check for Oracle Cloud
+    response=$(curl -s --max-time 2 -f http://169.254.169.254/opc/v1/instance/ 2>/dev/null)
+    if [[ $? -eq 0 ]] && [[ ! "${response}" =~ \<html ]]; then
+        cloud="${CLOUD_ORACLE}"
+        local shape
+        shape=$(curl -s --max-time 2 -f http://169.254.169.254/opc/v1/instance/shape 2>/dev/null)
+        if [[ -n "${shape}" ]] && [[ ! "${shape}" =~ \<html ]]; then
+            details="Shape: ${shape}"
+        fi
+        echo "${cloud}|${details}"
+        return
+    fi
+
+    echo "${CLOUD_NONE}|"
 }
 
 # =============================================================================
@@ -181,6 +292,10 @@ run_with_sudo() {
         echo -e "${RED}Error: Need root privileges to run: $*${NC}"
         return 1
     fi
+}
+
+command_exists() {
+    command -v "$1" &> /dev/null
 }
 
 # =============================================================================
@@ -407,6 +522,8 @@ EOF
                                     </div>
                                 `;
                             }).join('');
+                        } else {
+                            document.getElementById('dnsGrid').innerHTML = '<div class="loading">No DNS services detected</div>';
                         }
                     }
 
@@ -430,8 +547,13 @@ EOF
                                     </div>
                                 `;
                             }).join('');
+                        } else {
+                            document.getElementById('serviceList').innerHTML = '<div class="loading">No additional services</div>';
                         }
                     }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
                 });
         }
 
@@ -750,7 +872,18 @@ install_monitor() {
 
     # Step 2: Detect system
     print_step $current_step $total_steps "Detecting system"
-    echo -e "  Distribution: $(detect_distro)"
+    local distro=$(detect_distro)
+    local cloud_info=$(detect_cloud)
+    local cloud="${cloud_info%|*}"
+    local cloud_details="${cloud_info#*|}"
+
+    echo -e "  Distribution: ${distro}"
+    if [[ "${cloud}" != "${CLOUD_NONE}" ]]; then
+        echo -e "  Cloud Platform: ${cloud}"
+        if [[ -n "${cloud_details}" ]] && [[ ! "${cloud_details}" =~ \<html ]]; then
+            echo -e "  Details: ${cloud_details}"
+        fi
+    fi
     print_success "System detection complete"
     current_step=$((current_step + 1))
 
@@ -769,7 +902,7 @@ install_monitor() {
 
     # Step 4: Create directories
     print_step $current_step $total_steps "Creating directories"
-    mkdir -p "${CONFIG_BASE_DIR}" "${DASHBOARD_DIR}" "${BACKUP_DIR}" "$(dirname "${LOG_FILE}")"
+    mkdir -p "${CONFIG_BASE_DIR}" "${SNAPSHOT_DIR}" "${PERF_DATA_DIR}" "${DASHBOARD_DIR}" "${BACKUP_DIR}" "$(dirname "${LOG_FILE}")"
     print_success "Directories created"
     current_step=$((current_step + 1))
 
@@ -801,6 +934,7 @@ ExecStart=${MONITOR_SCRIPT}
 Restart=always
 RestartSec=10
 User=root
+Group=root
 
 [Install]
 WantedBy=multi-user.target
@@ -829,6 +963,12 @@ EOF
     echo -e "  Local URL:  ${GREEN}http://localhost:${DEFAULT_DASHBOARD_PORT}/${NC}"
     echo -e "  Network URL: ${GREEN}http://${ip}:${DEFAULT_DASHBOARD_PORT}/${NC}"
     echo ""
+
+    if [[ "${cloud}" != "${CLOUD_NONE}" ]]; then
+        echo -e "${YELLOW}Note: If accessing from outside, ensure port ${DEFAULT_DASHBOARD_PORT} is open in ${cloud} firewall${NC}"
+        echo ""
+    fi
+
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo ""
     echo -e "${WHITE}Installation Summary:${NC}"
@@ -839,8 +979,10 @@ EOF
     echo "  • Config: ${CONFIG_FILE}"
     echo "  • Logs: ${LOG_FILE}"
     echo "  • Dashboard: ${DASHBOARD_DIR}"
+    echo "  • DNS Services: ${#dns_services[@]}"
     echo ""
     echo -e "${GREEN}Thank you for using Service Load Monitor v3.0.4!${NC}"
+    echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}"
     echo ""
 }
 
@@ -850,24 +992,49 @@ EOF
 
 remove_monitor() {
     print_banner
-    echo -e "${RED}Removing Service Load Monitor...${NC}"
+    echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║              REMOVAL WIZARD - v3.0.4                       ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
 
+    if ! check_sudo; then
+        print_error "This operation requires sudo access"
+        exit 1
+    fi
+
+    echo -e "${RED}WARNING: This will remove Service Load Monitor${NC}"
+    echo -e "${YELLOW}Are you sure? (y/N)${NC}"
+    read -p "> " confirm
+    if [[ ! "${confirm}" =~ ^[Yy]$ ]]; then
+        print_info "Removal cancelled"
+        return
+    fi
+
+    echo ""
+    echo -e "${YELLOW}Remove configuration and data? (y/N)${NC}"
+    read -p "> " remove_data
+
+    print_info "Stopping services..."
     systemctl stop service-monitor.service 2>/dev/null
     systemctl stop service-monitor-http.service 2>/dev/null
     systemctl stop service-monitor-updater.service 2>/dev/null
 
+    print_info "Disabling services..."
     systemctl disable service-monitor.service 2>/dev/null
     systemctl disable service-monitor-http.service 2>/dev/null
     systemctl disable service-monitor-updater.service 2>/dev/null
 
+    print_info "Removing files..."
     rm -f "${MONITOR_SCRIPT}" "${SERVICE_FILE}" "${DASHBOARD_SCRIPT}"
     rm -f "${DASHBOARD_HTTP_SERVICE}" "${DASHBOARD_UPDATER_SERVICE}"
+    rm -f "${LOGROTATE_FILE}" "${VERSION_FILE}"
 
-    echo -e "${YELLOW}Remove configuration and data? (y/N)${NC}"
-    read -p "> " remove_data
     if [[ "${remove_data}" =~ ^[Yy]$ ]]; then
         rm -rf "${CONFIG_BASE_DIR}" "${LIB_BASE_DIR}" "${DASHBOARD_DIR}"
         rm -f "${LOG_FILE}"*
+        print_info "Configuration and data removed"
+    else
+        print_info "Configuration kept at: ${CONFIG_BASE_DIR}"
     fi
 
     systemctl daemon-reload
@@ -880,23 +1047,70 @@ remove_monitor() {
 
 show_status() {
     print_banner
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${WHITE}                    SYSTEM STATUS - v3.0.4${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+
+    # System info
+    echo -e "${WHITE}System Information:${NC}"
+    echo "  • Distribution: $(detect_distro)"
+
+    local cloud_info=$(detect_cloud)
+    local cloud="${cloud_info%|*}"
+    if [[ "${cloud}" != "${CLOUD_NONE}" ]]; then
+        echo "  • Cloud Platform: ${cloud}"
+    fi
+    echo "  • Hostname: $(hostname 2>/dev/null || echo "unknown")"
+    echo "  • Uptime: $(uptime | sed 's/.*up \([^,]*\),.*/\1/' 2>/dev/null || echo "unknown")"
+    echo ""
+
+    # Service status
     echo -e "${WHITE}Service Status:${NC}"
-    echo ""
 
-    systemctl is-active --quiet service-monitor.service && \
-        echo -e "  • ${GREEN}●${NC} Monitor Service: Running" || \
+    if systemctl is-active --quiet service-monitor.service 2>/dev/null; then
+        echo -e "  • ${GREEN}●${NC} Monitor Service: Running"
+    else
         echo -e "  • ${RED}○${NC} Monitor Service: Stopped"
+    fi
 
-    systemctl is-active --quiet service-monitor-http.service 2>/dev/null && \
-        echo -e "  • ${GREEN}●${NC} HTTP Server: Running" || \
+    if systemctl is-active --quiet service-monitor-http.service 2>/dev/null; then
+        echo -e "  • ${GREEN}●${NC} HTTP Server: Running (port ${DEFAULT_DASHBOARD_PORT})"
+    else
         echo -e "  • ${RED}○${NC} HTTP Server: Stopped"
+    fi
 
-    systemctl is-active --quiet service-monitor-updater.service 2>/dev/null && \
-        echo -e "  • ${GREEN}●${NC} Updater Service: Running" || \
+    if systemctl is-active --quiet service-monitor-updater.service 2>/dev/null; then
+        echo -e "  • ${GREEN}●${NC} Updater Service: Running"
+    else
         echo -e "  • ${RED}○${NC} Updater Service: Stopped"
+    fi
 
+    # Version info
     echo ""
-    echo -e "${WHITE}Version:${NC} ${SCRIPT_VERSION}"
+    echo -e "${WHITE}Version Information:${NC}"
+    if [[ -f "${VERSION_FILE}" ]]; then
+        echo "  • Installed: $(cat "${VERSION_FILE}")"
+    fi
+    echo "  • Script: ${SCRIPT_VERSION}"
+
+    # Dashboard URL
+    echo ""
+    echo -e "${WHITE}Dashboard URL:${NC}"
+    local ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+    echo "  • http://${ip}:${DEFAULT_DASHBOARD_PORT}/"
+}
+
+# =============================================================================
+# LOG FUNCTION
+# =============================================================================
+
+show_logs() {
+    if [[ -f "${LOG_FILE}" ]]; then
+        tail -f "${LOG_FILE}"
+    else
+        print_error "Log file not found: ${LOG_FILE}"
+    fi
 }
 
 # =============================================================================
@@ -917,6 +1131,187 @@ print_banner() {
 }
 
 # =============================================================================
+# FEATURES FUNCTION
+# =============================================================================
+
+show_features() {
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${WHITE}               FEATURE HIGHLIGHTS v3.0.4${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${GREEN}🛡️  DNS Service Integration${NC}"
+    echo "  • Pi-hole FTL"
+    echo "  • Unbound"
+    echo "  • DNSCrypt-Proxy"
+    echo "  • dnsmasq"
+    echo "  • BIND9"
+    echo ""
+    echo -e "${GREEN}📊 SILENT Dashboard${NC}"
+    echo "  • No ANSI codes in JSON"
+    echo "  • No installation messages"
+    echo "  • Clean service display"
+    echo "  • Real CPU/MEM usage"
+    echo ""
+}
+
+# =============================================================================
+# HELP FUNCTION
+# =============================================================================
+
+show_help() {
+    echo "Service Load Monitor v3.0.4"
+    echo ""
+    echo "Commands:"
+    echo "  install     - Install or update"
+    echo "  remove      - Remove the monitor"
+    echo "  status      - Show service status"
+    echo "  logs        - Follow log output"
+    echo "  backup      - Create a backup"
+    echo "  restore     - Restore from backup"
+    echo "  version     - Show version"
+    echo "  features    - Show features"
+    echo "  help        - Show this help"
+    echo ""
+}
+
+# =============================================================================
+# BACKUP FUNCTIONS
+# =============================================================================
+
+backup_existing() {
+    local backup_id="backup_$(date '+%Y%m%d_%H%M%S')"
+    local backup_path="${BACKUP_DIR}/${backup_id}"
+
+    print_info "Creating backup at ${backup_path}"
+
+    mkdir -p "${backup_path}"
+
+    if [[ -d "${CONFIG_BASE_DIR}" ]]; then
+        cp -r "${CONFIG_BASE_DIR}" "${backup_path}/" 2>/dev/null
+    fi
+
+    if [[ -f "${MONITOR_SCRIPT}" ]]; then
+        cp "${MONITOR_SCRIPT}" "${backup_path}/" 2>/dev/null
+    fi
+    if [[ -f "${DASHBOARD_SCRIPT}" ]]; then
+        cp "${DASHBOARD_SCRIPT}" "${backup_path}/" 2>/dev/null
+    fi
+
+    if [[ -f "${SERVICE_FILE}" ]]; then
+        cp "${SERVICE_FILE}" "${backup_path}/" 2>/dev/null
+    fi
+
+    echo "${SCRIPT_VERSION}" > "${backup_path}/version.txt"
+    date > "${backup_path}/backup_date.txt"
+
+    echo "${backup_id}"
+}
+
+restore_from_backup() {
+    local backup_id="$1"
+    local backup_path="${BACKUP_DIR}/${backup_id}"
+
+    if [[ ! -d "${backup_path}" ]]; then
+        print_error "Backup not found: ${backup_id}"
+        return 1
+    fi
+
+    print_warning "Restoring from backup: ${backup_id}"
+
+    systemctl stop service-monitor.service 2>/dev/null
+    systemctl stop service-monitor-http.service 2>/dev/null
+    systemctl stop service-monitor-updater.service 2>/dev/null
+
+    if [[ -d "${backup_path}/service-monitor" ]]; then
+        rm -rf "${CONFIG_BASE_DIR}" 2>/dev/null
+        cp -r "${backup_path}/service-monitor" "${CONFIG_BASE_DIR%/*}/" 2>/dev/null
+    fi
+
+    if [[ -f "${backup_path}/service-monitor.sh" ]]; then
+        cp "${backup_path}/service-monitor.sh" "${BASE_DIR}/" 2>/dev/null
+        chmod +x "${BASE_DIR}/service-monitor.sh"
+    fi
+    if [[ -f "${backup_path}/service-monitor-dashboard.sh" ]]; then
+        cp "${backup_path}/service-monitor-dashboard.sh" "${BASE_DIR}/" 2>/dev/null
+        chmod +x "${BASE_DIR}/service-monitor-dashboard.sh"
+    fi
+
+    if [[ -f "${backup_path}/service-monitor.service" ]]; then
+        cp "${backup_path}/service-monitor.service" "/etc/systemd/system/" 2>/dev/null
+    fi
+    if [[ -f "${backup_path}/service-monitor-http.service" ]]; then
+        cp "${backup_path}/service-monitor-http.service" "/etc/systemd/system/" 2>/dev/null
+    fi
+    if [[ -f "${backup_path}/service-monitor-updater.service" ]]; then
+        cp "${backup_path}/service-monitor-updater.service" "/etc/systemd/system/" 2>/dev/null
+    fi
+
+    systemctl daemon-reload
+
+    print_success "Restore completed"
+}
+
+# =============================================================================
+# VERSION COMPARE FUNCTION
+# =============================================================================
+
+version_compare() {
+    if [[ "$1" == "$2" ]]; then
+        echo "equal"
+        return 0
+    fi
+
+    local IFS=.
+    local i ver1=($1) ver2=($2)
+
+    for ((i=${#ver1[@]}; i<${#ver2[@]}; i++)); do
+        ver1[i]=0
+    done
+    for ((i=${#ver2[@]}; i<${#ver1[@]}; i++)); do
+        ver2[i]=0
+    done
+
+    for ((i=0; i<${#ver1[@]}; i++)); do
+        if [[ -z "${ver2[i]}" ]]; then
+            ver2[i]=0
+        fi
+        if ((10#${ver1[i]} > 10#${ver2[i]})); then
+            echo "newer"
+            return 0
+        fi
+        if ((10#${ver1[i]} < 10#${ver2[i]})); then
+            echo "older"
+            return 0
+        fi
+    done
+
+    echo "equal"
+}
+
+check_existing_installation() {
+    local installed_version=""
+    local has_old_files=false
+
+    if [[ -f "${VERSION_FILE}" ]]; then
+        installed_version=$(cat "${VERSION_FILE}")
+    fi
+
+    if [[ -f "${SERVICE_FILE}" ]]; then
+        has_old_files=true
+    fi
+
+    echo "${installed_version}|${has_old_files}"
+}
+
+migrate_configuration() {
+    print_info "Migrating existing configuration..."
+    local backup_id=$(backup_existing "pre-migration")
+    print_substep "Pre-migration backup created: ${backup_id}"
+    echo "${SCRIPT_VERSION}" > "${VERSION_FILE}"
+    print_success "Migration completed"
+}
+
+# =============================================================================
 # MAIN MENU
 # =============================================================================
 
@@ -928,17 +1323,12 @@ show_menu() {
     echo "  2) Remove Monitor"
     echo "  3) Show Status"
     echo "  4) View Logs"
-    echo "  5) Exit"
+    echo "  5) Create Backup"
+    echo "  6) Restore from Backup"
+    echo "  7) Show Features"
+    echo "  8) Exit"
     echo ""
-    echo -n -e "${YELLOW}Select option [1-5]: ${NC}"
-}
-
-show_logs() {
-    if [[ -f "${LOG_FILE}" ]]; then
-        tail -f "${LOG_FILE}"
-    else
-        print_error "Log file not found"
-    fi
+    echo -n -e "${YELLOW}Select option [1-8]: ${NC}"
 }
 
 # =============================================================================
@@ -948,15 +1338,47 @@ show_logs() {
 main() {
     if [[ $# -gt 0 ]]; then
         case "$1" in
-            install) install_monitor ;;
-            remove) remove_monitor ;;
-            status) show_status ;;
-            logs) show_logs ;;
-            version) echo "Service Load Monitor v${SCRIPT_VERSION}" ;;
-            help)
-                echo "Commands: install, remove, status, logs, version"
+            install)
+                install_monitor
                 ;;
-            *) echo "Unknown command: $1"; exit 1 ;;
+            remove)
+                remove_monitor
+                ;;
+            status)
+                show_status
+                ;;
+            logs)
+                show_logs
+                ;;
+            backup)
+                check_sudo
+                backup_existing "manual"
+                echo ""
+                print_success "Backup created"
+                ;;
+            restore)
+                check_sudo
+                echo "Available backups:"
+                ls -1 "${BACKUP_DIR}" 2>/dev/null || echo "No backups found"
+                echo ""
+                echo -n "Enter backup ID: "
+                read -r backup_id
+                restore_from_backup "${backup_id}"
+                ;;
+            version)
+                echo "Service Load Monitor v${SCRIPT_VERSION}"
+                ;;
+            features)
+                show_features
+                ;;
+            help)
+                show_help
+                ;;
+            *)
+                echo "Unknown command: $1"
+                show_help
+                exit 1
+                ;;
         esac
         exit 0
     fi
@@ -966,12 +1388,58 @@ main() {
         read -r choice
 
         case "${choice}" in
-            1) install_monitor; read -p "Press Enter to continue..." ;;
-            2) remove_monitor; read -p "Press Enter to continue..." ;;
-            3) show_status; read -p "Press Enter to continue..." ;;
-            4) show_logs ;;
-            5) echo -e "\n${GREEN}Goodbye!${NC}\n"; exit 0 ;;
-            *) echo -e "${RED}Invalid option${NC}"; sleep 2 ;;
+            1)
+                install_monitor
+                read -p "Press Enter to continue..."
+                ;;
+            2)
+                remove_monitor
+                read -p "Press Enter to continue..."
+                ;;
+            3)
+                show_status
+                read -p "Press Enter to continue..."
+                ;;
+            4)
+                show_logs
+                ;;
+            5)
+                if check_sudo; then
+                    backup_existing "manual"
+                    echo ""
+                    print_success "Backup created"
+                else
+                    print_error "Sudo required for backup"
+                fi
+                read -p "Press Enter to continue..."
+                ;;
+            6)
+                if check_sudo; then
+                    echo "Available backups:"
+                    ls -1 "${BACKUP_DIR}" 2>/dev/null || echo "No backups found"
+                    echo ""
+                    echo -n "Enter backup ID: "
+                    read -r backup_id
+                    restore_from_backup "${backup_id}"
+                else
+                    print_error "Sudo required for restore"
+                fi
+                read -p "Press Enter to continue..."
+                ;;
+            7)
+                print_banner
+                show_features
+                read -p "Press Enter to continue..."
+                ;;
+            8)
+                echo -e "\n${GREEN}Thank you for using Service Load Monitor v3.0.4!${NC}"
+                echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}\n"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid option${NC}"
+                sleep 2
+                ;;
         esac
     done
 }
