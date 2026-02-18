@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # =============================================================================
-# Service Load Monitor - Installation & Management Script v3.0.6
+# Service Load Monitor - Installation & Management Script v3.0.7
 # =============================================================================
 # Author:  Wael Isa
-# Version: 3.0.6
+# Version: 3.0.7
 # Date:    February 18, 2026
 # Website: https://www.wael.name
 # =============================================================================
@@ -24,7 +24,7 @@ NC='\033[0m' # No Color
 
 # Script information
 SCRIPT_NAME="Service Load Monitor"
-SCRIPT_VERSION="3.0.6"
+SCRIPT_VERSION="3.0.7"
 SCRIPT_AUTHOR="Wael Isa"
 SCRIPT_URL="https://www.wael.name"
 SCRIPT_DATE="February 18, 2026"
@@ -48,7 +48,7 @@ DASHBOARD_UPDATER_SERVICE="/etc/systemd/system/service-monitor-updater.service"
 VERSION_FILE="${CONFIG_BASE_DIR}/installed_version"
 BACKUP_DIR="${LIB_BASE_DIR}/backups"
 
-# DNS service names
+# DNS service names - EXACT matches for systemd
 DNS_SERVICES=(
     "pihole-FTL.service"
     "unbound.service"
@@ -130,34 +130,44 @@ detect_distro() {
 detect_dns_services_silent() {
     local detected=()
 
-    # Check Pi-hole
-    if systemctl list-unit-files 2>/dev/null | grep -q "pihole-FTL.service" 2>/dev/null; then
+    # Check Pi-hole with exact service name matching
+    if systemctl list-unit-files 2>/dev/null | grep -q "^pihole-FTL.service" 2>/dev/null; then
+        detected+=("pihole-FTL.service")
+    elif systemctl list-unit-files 2>/dev/null | grep -q "pihole-FTL" 2>/dev/null; then
         detected+=("pihole-FTL.service")
     elif [[ -f "/etc/systemd/system/pihole-FTL.service" ]]; then
         detected+=("pihole-FTL.service")
     fi
 
     # Check Unbound
-    if systemctl list-unit-files 2>/dev/null | grep -q "unbound.service" 2>/dev/null; then
+    if systemctl list-unit-files 2>/dev/null | grep -q "^unbound.service" 2>/dev/null; then
+        detected+=("unbound.service")
+    elif systemctl list-unit-files 2>/dev/null | grep -q "unbound" 2>/dev/null; then
         detected+=("unbound.service")
     elif [[ -f "/etc/systemd/system/unbound.service" ]]; then
         detected+=("unbound.service")
     fi
 
     # Check DNSCrypt-Proxy
-    if systemctl list-unit-files 2>/dev/null | grep -q "dnscrypt-proxy.service" 2>/dev/null; then
+    if systemctl list-unit-files 2>/dev/null | grep -q "^dnscrypt-proxy.service" 2>/dev/null; then
+        detected+=("dnscrypt-proxy.service")
+    elif systemctl list-unit-files 2>/dev/null | grep -q "dnscrypt-proxy" 2>/dev/null; then
         detected+=("dnscrypt-proxy.service")
     elif [[ -f "/etc/systemd/system/dnscrypt-proxy.service" ]]; then
         detected+=("dnscrypt-proxy.service")
     fi
 
     # Check dnsmasq
-    if systemctl list-unit-files 2>/dev/null | grep -q "dnsmasq.service" 2>/dev/null; then
+    if systemctl list-unit-files 2>/dev/null | grep -q "^dnsmasq.service" 2>/dev/null; then
+        detected+=("dnsmasq.service")
+    elif systemctl list-unit-files 2>/dev/null | grep -q "dnsmasq" 2>/dev/null; then
         detected+=("dnsmasq.service")
     fi
 
     # Check BIND9
-    if systemctl list-unit-files 2>/dev/null | grep -q "named.service" 2>/dev/null; then
+    if systemctl list-unit-files 2>/dev/null | grep -q "^named.service" 2>/dev/null; then
+        detected+=("named.service")
+    elif systemctl list-unit-files 2>/dev/null | grep -q "named" 2>/dev/null; then
         detected+=("named.service")
     fi
 
@@ -189,7 +199,7 @@ check_sudo() {
 }
 
 # =============================================================================
-# DASHBOARD FUNCTIONS - v3.0.6 FIXED
+# DASHBOARD FUNCTIONS - v3.0.7 FIXED
 # =============================================================================
 
 create_dashboard_files() {
@@ -201,7 +211,7 @@ create_dashboard_files() {
     cat > "${DASHBOARD_DIR}/status.json" << EOF
 {
     "last_update": "$(date '+%Y-%m-%d %H:%M:%S')",
-    "version": "3.0.6",
+    "version": "3.0.7",
     "servers": [
         {
             "id": "local",
@@ -219,6 +229,15 @@ create_dashboard_files() {
 }
 EOF
 
+    # Set proper ownership for web server
+    if id www-data &>/dev/null; then
+        chown -R www-data:www-data "${DASHBOARD_DIR}" 2>/dev/null
+    elif id apache &>/dev/null; then
+        chown -R apache:apache "${DASHBOARD_DIR}" 2>/dev/null
+    elif id nginx &>/dev/null; then
+        chown -R nginx:nginx "${DASHBOARD_DIR}" 2>/dev/null
+    fi
+
     # Create index.html
     cat > "${DASHBOARD_DIR}/index.html" << 'HTML'
 <!DOCTYPE html>
@@ -227,7 +246,7 @@ EOF
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="refresh" content="30">
-    <title>Service Monitor Dashboard v3.0.6</title>
+    <title>Service Monitor Dashboard v3.0.7</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -265,7 +284,9 @@ EOF
             border-radius: 15px;
             padding: 20px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
         }
+        .stat-card:hover { transform: translateY(-5px); }
         .stat-card h3 { color: #666; font-size: 0.9em; margin-bottom: 10px; }
         .stat-card .value { color: #333; font-size: 1.8em; font-weight: bold; }
 
@@ -277,7 +298,13 @@ EOF
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
             border-left: 4px solid #f0ad4e;
         }
-        .pihole-section h2 { color: #333; margin-bottom: 20px; }
+        .pihole-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
         .pihole-stats {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -303,7 +330,9 @@ EOF
             border-radius: 10px;
             padding: 15px;
             border-left: 4px solid #667eea;
+            transition: transform 0.2s;
         }
+        .dns-card:hover { transform: translateY(-3px); }
         .dns-card h3 {
             color: #333;
             margin-bottom: 10px;
@@ -333,16 +362,24 @@ EOF
         .service-item {
             display: grid;
             grid-template-columns: 2fr 1fr 1fr 1fr;
+            align-items: center;
             padding: 15px;
             background: #f8f9fa;
             border-radius: 10px;
+            transition: transform 0.2s;
         }
+        .service-item:hover { transform: translateX(5px); }
+        .service-name { font-weight: 600; color: #333; }
+        .service-status { text-align: center; }
         .status-badge {
             display: inline-block;
             padding: 5px 10px;
             border-radius: 20px;
             font-size: 0.9em;
+            font-weight: 500;
         }
+        .service-cpu { text-align: center; color: #667eea; }
+        .service-mem { text-align: center; color: #764ba2; }
         .footer {
             text-align: center;
             margin-top: 20px;
@@ -350,12 +387,19 @@ EOF
         }
         .last-update { color: #999; font-size: 0.9em; margin-top: 10px; }
         .loading { text-align: center; padding: 40px; color: #666; }
+        .no-services {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔍 Service Load Monitor <span class="badge">v3.0.6</span></h1>
+            <h1>🔍 Service Load Monitor <span class="badge">v3.0.7</span></h1>
             <div class="last-update" id="lastUpdate">Loading...</div>
         </div>
 
@@ -378,7 +422,7 @@ EOF
     </div>
 
     <div class="footer">
-        <p>© 2026 Service Load Monitor v3.0.6</p>
+        <p>© 2026 Service Load Monitor v3.0.7</p>
     </div>
 
     <script>
@@ -388,6 +432,7 @@ EOF
                 .then(data => {
                     document.getElementById('lastUpdate').textContent = 'Last updated: ' + (data.last_update || 'Unknown');
 
+                    // Update stats
                     if (data.servers && data.servers[0]) {
                         const s = data.servers[0];
                         document.getElementById('statsGrid').innerHTML = `
@@ -398,13 +443,15 @@ EOF
                         `;
                     }
 
+                    // Update Pi-hole section
+                    const piholeSection = document.getElementById('piholeSection');
                     if (data.pihole && data.pihole.status) {
-                        document.getElementById('piholeSection').style.display = 'block';
+                        piholeSection.style.display = 'block';
                         const piholeStats = document.getElementById('piholeStats');
                         const statusClass = data.pihole.status === 'active' ? 'status-active' : 'status-inactive';
-                        const blockedPercent = data.pihole.queries_today > 0
-                            ? ((data.pihole.blocked_today / data.pihole.queries_today * 100).toFixed(1) + '%')
-                            : '0%';
+                        const queriesToday = data.pihole.queries_today || 0;
+                        const blockedToday = data.pihole.blocked_today || 0;
+                        const blockedPercent = queriesToday > 0 ? ((blockedToday / queriesToday * 100).toFixed(1) + '%') : '0%';
 
                         piholeStats.innerHTML = `
                             <div class="stat-card">
@@ -413,40 +460,50 @@ EOF
                             </div>
                             <div class="stat-card">
                                 <h3>Queries Today</h3>
-                                <div class="value">${data.pihole.queries_today || 0}</div>
+                                <div class="value">${queriesToday.toLocaleString()}</div>
                             </div>
                             <div class="stat-card">
                                 <h3>Blocked Today</h3>
-                                <div class="value">${data.pihole.blocked_today || 0}</div>
+                                <div class="value">${blockedToday.toLocaleString()}</div>
                             </div>
                             <div class="stat-card">
                                 <h3>Blocked %</h3>
                                 <div class="value">${blockedPercent}</div>
                             </div>
                         `;
+                    } else {
+                        piholeSection.style.display = 'none';
                     }
 
+                    // Update DNS services
+                    const dnsGrid = document.getElementById('dnsGrid');
                     if (data.servers && data.servers[0] && data.servers[0].dns_services) {
                         const dnsServices = data.servers[0].dns_services;
                         if (dnsServices.length > 0) {
-                            document.getElementById('dnsGrid').innerHTML = dnsServices.map(s => {
+                            dnsGrid.innerHTML = dnsServices.map(s => {
                                 const statusClass = s.status === 'active' ? 'status-active' : 'status-inactive';
+                                const serviceName = s.name.replace('.service', '').replace(/-/g, ' ');
                                 return `
                                     <div class="dns-card">
-                                        <h3>${s.name.replace('.service', '')} <span class="status ${statusClass}">${s.status}</span></h3>
-                                        <div>CPU: ${s.cpu || 0}% | MEM: ${s.mem || 0}%</div>
+                                        <h3>${serviceName} <span class="status ${statusClass}">${s.status}</span></h3>
+                                        <div style="display: flex; justify-content: space-between;">
+                                            <span>CPU: ${s.cpu || 0}%</span>
+                                            <span>MEM: ${s.mem || 0}%</span>
+                                        </div>
                                     </div>
                                 `;
                             }).join('');
                         } else {
-                            document.getElementById('dnsGrid').innerHTML = '<div class="loading">No DNS services detected</div>';
+                            dnsGrid.innerHTML = '<div class="no-services">No DNS services detected</div>';
                         }
                     }
 
+                    // Update regular services
+                    const serviceList = document.getElementById('serviceList');
                     if (data.servers && data.servers[0] && data.servers[0].services) {
                         const services = data.servers[0].services;
                         if (services.length > 0) {
-                            document.getElementById('serviceList').innerHTML = services.map(s => {
+                            serviceList.innerHTML = services.map(s => {
                                 const statusClass = s.status === 'active' ? 'status-active' : 'status-inactive';
                                 return `
                                     <div class="service-item">
@@ -454,18 +511,19 @@ EOF
                                         <div class="service-status">
                                             <span class="status-badge ${statusClass}">${s.status}</span>
                                         </div>
-                                        <div>${s.cpu || 0}% CPU</div>
-                                        <div>${s.mem || 0}% MEM</div>
+                                        <div class="service-cpu">${s.cpu || 0}% CPU</div>
+                                        <div class="service-mem">${s.mem || 0}% MEM</div>
                                     </div>
                                 `;
                             }).join('');
                         } else {
-                            document.getElementById('serviceList').innerHTML = '<div class="loading">No services configured</div>';
+                            serviceList.innerHTML = '<div class="no-services">No additional services configured</div>';
                         }
                     }
                 })
                 .catch(error => {
-                    console.error('Error:', error);
+                    console.error('Error loading data:', error);
+                    document.getElementById('statsGrid').innerHTML = '<div class="no-services">Error loading data. Check if updater is running.</div>';
                 });
         }
 
@@ -485,7 +543,7 @@ create_dashboard_scripts() {
 
     cat > "${DASHBOARD_SCRIPT}" << 'EOF'
 #!/bin/bash
-# Service Monitor Dashboard Updater v3.0.6
+# Service Monitor Dashboard Updater v3.0.7
 
 DASHBOARD_DIR="/var/www/html/service-monitor"
 CONFIG_FILE="/etc/service-monitor/config.conf"
@@ -507,20 +565,44 @@ get_service_status() {
     local cpu=0
     local mem=0
 
+    # Try multiple methods to check service status
     if systemctl is-active --quiet "$service" 2>/dev/null; then
         status="active"
+    elif systemctl is-active --quiet "${service%.service}" 2>/dev/null; then
+        status="active"
+        service="${service%.service}"
+    elif pgrep -f "$service" >/dev/null 2>&1; then
+        status="active"
+    fi
 
-        # Get PID
+    if [[ "$status" == "active" ]]; then
+        # Get PID using multiple methods
         local pid=""
         case "$service" in
-            "pihole-FTL.service") pid=$(pgrep -f "pihole-FTL" | head -1) ;;
-            "unbound.service") pid=$(pgrep -f "unbound" | head -1) ;;
-            "dnscrypt-proxy.service") pid=$(pgrep -f "dnscrypt-proxy" | head -1) ;;
-            "dnsmasq.service") pid=$(pgrep -f "dnsmasq" | head -1) ;;
-            "named.service") pid=$(pgrep -f "named" | head -1) ;;
-            *) pid=$(systemctl show -p MainPID "$service" 2>/dev/null | cut -d= -f2) ;;
+            "pihole-FTL.service"|"pihole-FTL")
+                pid=$(pgrep -f "pihole-FTL" | head -1)
+                ;;
+            "unbound.service"|"unbound")
+                pid=$(pgrep -f "unbound" | head -1)
+                ;;
+            "dnscrypt-proxy.service"|"dnscrypt-proxy")
+                pid=$(pgrep -f "dnscrypt-proxy" | head -1)
+                ;;
+            "dnsmasq.service"|"dnsmasq")
+                pid=$(pgrep -f "dnsmasq" | head -1)
+                ;;
+            "named.service"|"named")
+                pid=$(pgrep -f "named" | head -1)
+                ;;
+            *)
+                pid=$(pgrep -f "$service" | head -1)
+                if [[ -z "$pid" ]]; then
+                    pid=$(systemctl show -p MainPID "$service" 2>/dev/null | cut -d= -f2)
+                fi
+                ;;
         esac
 
+        # Get CPU/MEM if PID exists
         if [[ -n "$pid" ]] && [[ "$pid" != "0" ]] && [[ -f "/proc/$pid/stat" ]]; then
             cpu=$(ps -p "$pid" -o %cpu --no-headers 2>/dev/null | tr -d ' ' | cut -d'.' -f1)
             mem=$(ps -p "$pid" -o %mem --no-headers 2>/dev/null | tr -d ' ' | cut -d'.' -f1)
@@ -532,29 +614,102 @@ get_service_status() {
     echo "$status|$cpu|$mem"
 }
 
-# Function to get Pi-hole stats
+# Function to get Pi-hole stats - FIXED VERSION
 get_pihole_stats() {
     local status="inactive"
     local queries_today=0
     local blocked_today=0
 
+    log "Checking Pi-hole status..."
+
+    # Check if Pi-hole is installed and running
     if command -v pihole &>/dev/null; then
+        log "Pi-hole command found"
+
+        # Check if pihole-FTL service is active
         if systemctl is-active --quiet pihole-FTL.service 2>/dev/null; then
             status="active"
+            log "Pi-hole FTL is active"
+
+            # Try multiple log locations
+            local pihole_log=""
             if [[ -f "/var/log/pihole.log" ]]; then
-                queries_today=$(grep -c "query" /var/log/pihole.log 2>/dev/null || echo 0)
-                blocked_today=$(grep -c "gravity blocked" /var/log/pihole.log 2>/dev/null || echo 0)
+                pihole_log="/var/log/pihole.log"
+            elif [[ -f "/var/log/pihole/pihole.log" ]]; then
+                pihole_log="/var/log/pihole/pihole.log"
+            elif [[ -f "/var/log/pihole-FTL.log" ]]; then
+                pihole_log="/var/log/pihole-FTL.log"
             fi
+
+            if [[ -n "$pihole_log" ]]; then
+                log "Using Pi-hole log: $pihole_log"
+                # Get today's date in log format
+                today=$(date '+%b %d')
+
+                # Count queries and blocked entries for today
+                if [[ "$pihole_log" == *"FTL"* ]]; then
+                    # FTL log format
+                    queries_today=$(grep -c "query" "$pihole_log" 2>/dev/null || echo 0)
+                    blocked_today=$(grep -c "blocked" "$pihole_log" 2>/dev/null || echo 0)
+                else
+                    # Standard pihole.log format
+                    queries_today=$(grep -c "query" "$pihole_log" 2>/dev/null || echo 0)
+                    blocked_today=$(grep -c "gravity blocked" "$pihole_log" 2>/dev/null || echo 0)
+
+                    # If no entries found with grep, try using pihole command
+                    if [[ $queries_today -eq 0 ]] && [[ $blocked_today -eq 0 ]]; then
+                        log "No log entries found with grep, trying pihole command..."
+                        if command -v pihole &>/dev/null; then
+                            # Try to get stats from pihole command
+                            local stats=$(pihole -c -j 2>/dev/null)
+                            if [[ -n "$stats" ]]; then
+                                queries_today=$(echo "$stats" | grep -o '"dns_queries_today":[0-9]*' | cut -d':' -f2)
+                                blocked_today=$(echo "$stats" | grep -o '"ads_blocked_today":[0-9]*' | cut -d':' -f2)
+                                log "Got stats from pihole command: queries=$queries_today, blocked=$blocked_today"
+                            fi
+                        fi
+                    fi
+                fi
+
+                # Ensure we have numbers
+                queries_today=${queries_today:-0}
+                blocked_today=${blocked_today:-0}
+                log "Final counts - Queries: $queries_today, Blocked: $blocked_today"
+            else
+                log "No Pi-hole log files found"
+            fi
+        else
+            log "Pi-hole FTL is not active"
         fi
+    else
+        log "Pi-hole not installed"
     fi
 
     echo "{\"status\":\"$status\",\"queries_today\":$queries_today,\"blocked_today\":$blocked_today}"
 }
 
-log "=== Service Monitor Updater v3.0.6 Started ==="
+log "=== Service Monitor Updater v3.0.7 Started ==="
+log "PID: $$"
+log "Dashboard directory: $DASHBOARD_DIR"
+log "Config file: $CONFIG_FILE"
 
+# Verify dashboard directory exists
+if [[ ! -d "$DASHBOARD_DIR" ]]; then
+    log "ERROR: Dashboard directory $DASHBOARD_DIR does not exist"
+    mkdir -p "$DASHBOARD_DIR" 2>/dev/null || {
+        log "CRITICAL: Cannot create dashboard directory"
+        exit 1
+    }
+    log "Created dashboard directory"
+fi
+
+# Main loop
+loop_count=0
 while true; do
-    # Get system info
+    loop_count=$((loop_count + 1))
+    log "=== Loop $loop_count starting ==="
+
+    # Get system info with detailed logging
     HOSTNAME=$(hostname 2>/dev/null || echo "localhost")
     UPTIME=$(uptime 2>/dev/null | sed 's/.*up \([^,]*\),.*/\1/' || echo "0")
     LOAD=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | xargs || echo "0.00")
@@ -562,23 +717,29 @@ while true; do
     MEMORY=$(free -h 2>/dev/null | grep Mem | awk '{print $3"/"$2}' || echo "0/0")
     DISK=$(df -h / 2>/dev/null | awk 'NR==2 {print $5}' || echo "0%")
 
-    log "System: $HOSTNAME, Load: $LOAD, Memory: $MEMORY, Disk: $DISK"
+    log "System: $HOSTNAME, Uptime: $UPTIME, Load: $LOAD, Cores: $CPU_CORES, Memory: $MEMORY, Disk: $DISK"
 
     # Get Pi-hole stats
     PIHOLE_STATS=$(get_pihole_stats)
+    log "Pi-hole stats: $PIHOLE_STATS"
 
     # Check DNS services
     DNS_SERVICES=("pihole-FTL.service" "unbound.service" "dnscrypt-proxy.service" "dnsmasq.service" "named.service")
     DNS_JSON=""
-    FIRST=1
+    FIRST_DNS=1
 
     for SERVICE in "${DNS_SERVICES[@]}"; do
-        if systemctl list-unit-files 2>/dev/null | grep -q "$SERVICE" || [[ -f "/etc/systemd/system/$SERVICE" ]]; then
+        # Check if service exists using multiple methods
+        if systemctl list-unit-files 2>/dev/null | grep -q "$SERVICE" || \
+           systemctl list-unit-files 2>/dev/null | grep -q "${SERVICE%.service}" || \
+           [[ -f "/etc/systemd/system/$SERVICE" ]] || \
+           pgrep -f "${SERVICE%.service}" >/dev/null 2>&1; then
+
             IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
             log "DNS $SERVICE: $STATUS (CPU: $CPU%, MEM: $MEM%)"
 
-            if [[ $FIRST -eq 1 ]]; then
-                FIRST=0
+            if [[ $FIRST_DNS -eq 1 ]]; then
+                FIRST_DNS=0
             else
                 DNS_JSON+=","
             fi
@@ -587,42 +748,121 @@ while true; do
         fi
     done
 
-    # Get monitored services from config
+    # Get monitored services from config - IMPROVED PARSING
     SERVICES_JSON=""
-    FIRST=1
+    FIRST_REG=1
 
     if [[ -f "$CONFIG_FILE" ]]; then
-        while IFS= read -r line; do
-            if [[ "$line" =~ MONITORED_SERVICES=\"(.*)\" ]]; then
-                IFS=' ' read -ra SERVICES <<< "${BASH_REMATCH[1]}"
-                for SERVICE in "${SERVICES[@]}"; do
+        log "Reading config from $CONFIG_FILE"
+
+        # Try to source the config file directly
+        if source "$CONFIG_FILE" 2>/dev/null; then
+            log "Successfully sourced config file"
+
+            # Check if MONITORED_SERVICES is an array
+            if [[ "$(declare -p MONITORED_SERVICES 2>/dev/null)" =~ "declare -a" ]]; then
+                log "MONITORED_SERVICES is an array with ${#MONITORED_SERVICES[@]} elements"
+                for SERVICE in "${MONITORED_SERVICES[@]}"; do
+                    # Skip empty entries
+                    [[ -z "$SERVICE" ]] && continue
+
                     # Skip DNS services to avoid duplicates
-                    [[ " ${DNS_SERVICES[@]} " =~ " $SERVICE " ]] && continue
+                    skip=0
+                    for dns in "${DNS_SERVICES[@]}"; do
+                        if [[ "$SERVICE" == "$dns" ]] || [[ "$SERVICE" == "${dns%.service}" ]]; then
+                            skip=1
+                            break
+                        fi
+                    done
+                    [[ $skip -eq 1 ]] && continue
 
                     IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
-                    log "Service $SERVICE: $STATUS (CPU: $CPU%, MEM: $MEM%)"
+                    log "Monitored service $SERVICE: $STATUS (CPU: $CPU%, MEM: $MEM%)"
 
-                    if [[ $FIRST -eq 1 ]]; then
-                        FIRST=0
+                    if [[ $FIRST_REG -eq 1 ]]; then
+                        FIRST_REG=0
                     else
                         SERVICES_JSON+=","
                     fi
 
                     SERVICES_JSON+="{\"name\":\"$SERVICE\",\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
                 done
-                break
+            else
+                log "MONITORED_SERVICES is not an array, trying string parsing"
+                # Fallback to string parsing for backward compatibility
+                while IFS= read -r line; do
+                    if [[ "$line" =~ MONITORED_SERVICES=[\"\'](.*)[\"\'] ]]; then
+                        IFS=' ' read -ra SERVICES <<< "${BASH_REMATCH[1]}"
+                        for SERVICE in "${SERVICES[@]}"; do
+                            # Skip DNS services to avoid duplicates
+                            skip=0
+                            for dns in "${DNS_SERVICES[@]}"; do
+                                if [[ "$SERVICE" == "$dns" ]] || [[ "$SERVICE" == "${dns%.service}" ]]; then
+                                    skip=1
+                                    break
+                                fi
+                            done
+                            [[ $skip -eq 1 ]] && continue
+
+                            IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
+                            log "Monitored service $SERVICE: $STATUS (CPU: $CPU%, MEM: $MEM%)"
+
+                            if [[ $FIRST_REG -eq 1 ]]; then
+                                FIRST_REG=0
+                            else
+                                SERVICES_JSON+=","
+                            fi
+
+                            SERVICES_JSON+="{\"name\":\"$SERVICE\",\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
+                        done
+                        break
+                    fi
+                done < "$CONFIG_FILE"
             fi
-        done < "$CONFIG_FILE"
+        else
+            log "WARNING: Could not source config file, trying manual parsing"
+            # Fallback to manual parsing
+            while IFS= read -r line; do
+                if [[ "$line" =~ MONITORED_SERVICES=[\"\'](.*)[\"\'] ]]; then
+                    IFS=' ' read -ra SERVICES <<< "${BASH_REMATCH[1]}"
+                    for SERVICE in "${SERVICES[@]}"; do
+                        # Skip DNS services to avoid duplicates
+                        skip=0
+                        for dns in "${DNS_SERVICES[@]}"; do
+                            if [[ "$SERVICE" == "$dns" ]] || [[ "$SERVICE" == "${dns%.service}" ]]; then
+                                skip=1
+                                break
+                            fi
+                        done
+                        [[ $skip -eq 1 ]] && continue
+
+                        IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
+                        log "Monitored service $SERVICE: $STATUS (CPU: $CPU%, MEM: $MEM%)"
+
+                        if [[ $FIRST_REG -eq 1 ]]; then
+                            FIRST_REG=0
+                        else
+                            SERVICES_JSON+=","
+                        fi
+
+                        SERVICES_JSON+="{\"name\":\"$SERVICE\",\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
+                    done
+                    break
+                fi
+            done < "$CONFIG_FILE"
+        fi
+    else
+        log "WARNING: Config file $CONFIG_FILE not found"
     fi
 
     # Write JSON atomically
-    TMP_FILE="${DASHBOARD_DIR}/status.json.tmp"
+    TMP_FILE="${DASHBOARD_DIR}/status.json.tmp.$$"
     FINAL_FILE="${DASHBOARD_DIR}/status.json"
 
     cat > "$TMP_FILE" << JSON
 {
     "last_update": "$(date '+%Y-%m-%d %H:%M:%S')",
-    "version": "3.0.6",
+    "version": "3.0.7",
     "servers": [
         {
             "id": "local",
@@ -640,10 +880,27 @@ while true; do
 }
 JSON
 
-    mv "$TMP_FILE" "$FINAL_FILE"
-    chmod 644 "$FINAL_FILE"
-    log "JSON updated successfully"
+    # Verify JSON is valid
+    if python3 -m json.tool "$TMP_FILE" > /dev/null 2>&1; then
+        mv "$TMP_FILE" "$FINAL_FILE"
+        chmod 644 "$FINAL_FILE"
 
+        # Set proper ownership
+        if id www-data &>/dev/null; then
+            chown www-data:www-data "$FINAL_FILE" 2>/dev/null
+        elif id apache &>/dev/null; then
+            chown apache:apache "$FINAL_FILE" 2>/dev/null
+        elif id nginx &>/dev/null; then
+            chown nginx:nginx "$FINAL_FILE" 2>/dev/null
+        fi
+
+        log "Successfully wrote valid JSON to $FINAL_FILE"
+    else
+        log "ERROR: Generated invalid JSON, keeping previous version"
+        rm -f "$TMP_FILE"
+    fi
+
+    log "=== Loop $loop_count completed, sleeping 30 seconds ==="
     sleep 30
 done
 EOF
@@ -655,7 +912,7 @@ EOF
         sed -i '1s/^/#!\/bin\/bash\n/' "${DASHBOARD_SCRIPT}"
     fi
 
-    print_substep "Dashboard scripts created"
+    print_substep "Dashboard scripts created with fixed Pi-hole stats and config parsing"
 }
 
 create_dashboard_services() {
@@ -663,7 +920,7 @@ create_dashboard_services() {
 
     cat > "${DASHBOARD_HTTP_SERVICE}" << EOF
 [Unit]
-Description=Service Monitor HTTP Server v3.0.6
+Description=Service Monitor HTTP Server v3.0.7
 After=network.target
 
 [Service]
@@ -683,7 +940,7 @@ EOF
 
     cat > "${DASHBOARD_UPDATER_SERVICE}" << EOF
 [Unit]
-Description=Service Monitor Dashboard Updater v3.0.6
+Description=Service Monitor Dashboard Updater v3.0.7
 After=network.target
 
 [Service]
@@ -695,6 +952,7 @@ Restart=always
 RestartSec=5
 StandardOutput=null
 StandardError=null
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 [Install]
 WantedBy=multi-user.target
@@ -706,6 +964,15 @@ EOF
     systemctl restart service-monitor-http.service &> /dev/null
     systemctl restart service-monitor-updater.service &> /dev/null
 
+    # Verify services are running
+    sleep 2
+    if systemctl is-active --quiet service-monitor-updater.service; then
+        print_substep "Updater service is running"
+    else
+        print_warning "Updater service failed to start, checking logs..."
+        journalctl -u service-monitor-updater.service -n 10 --no-pager
+    fi
+
     print_substep "Dashboard services created"
 }
 
@@ -716,7 +983,7 @@ EOF
 create_monitor_script() {
     cat > "${MONITOR_SCRIPT}" << 'EOF'
 #!/bin/bash
-# Service Load Monitor - Core Script v3.0.6
+# Service Load Monitor - Core Script v3.0.7
 
 CONFIG_FILE="/etc/service-monitor/config.conf"
 LOG_FILE="/var/log/service-monitor.log"
@@ -732,7 +999,7 @@ log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
 }
 
-log_message "Service Load Monitor v3.0.6 started"
+log_message "Service Load Monitor v3.0.7 started"
 
 while true; do
     CURRENT_LOAD=$(uptime | awk -F'load average:' '{print $2}' | awk -F',' '{print $1}' | sed 's/ //g' 2>/dev/null || echo "0")
@@ -753,28 +1020,43 @@ create_config_file() {
     mkdir -p "${CONFIG_BASE_DIR}"
 
     local detected_dns=($(detect_dns_services_silent))
-    local dns_list=""
-    for service in "${detected_dns[@]}"; do
-        [[ -n "$dns_list" ]] && dns_list+=" "
-        dns_list+="$service"
-    done
 
-    local common_services="ssh.service cron.service"
-    local MONITORED="${dns_list} ${common_services}"
-
+    # Create config with proper bash array syntax
     cat > "${CONFIG_FILE}" << EOF
-# Service Load Monitor Configuration v3.0.6
+# Service Load Monitor Configuration v3.0.7
+# This file uses bash array syntax for MONITORED_SERVICES
+
+# Monitor settings
 CHECK_INTERVAL=30
 LOAD_THRESHOLD=5.0
 CPU_THRESHOLD=70
 IO_WAIT_THRESHOLD=20
-MONITORED_SERVICES="${MONITORED}"
+
+# Service settings - Add or remove services as needed
+# Format: ( "service1.service" "service2.service" )
+MONITORED_SERVICES=(
+EOF
+
+    # Add detected DNS services
+    for service in "${detected_dns[@]}"; do
+        echo "    \"$service\"" >> "${CONFIG_FILE}"
+    done
+
+    # Add common system services
+    cat >> "${CONFIG_FILE}" << EOF
+    "ssh.service"
+    "cron.service"
+)
+
+# Dashboard settings
 ENABLE_DASHBOARD="yes"
 DASHBOARD_PORT=8080
+
+# Logging
 LOG_FILE="/var/log/service-monitor.log"
 EOF
 
-    print_substep "Configuration file created"
+    print_substep "Configuration file created with bash array syntax"
 }
 
 # =============================================================================
@@ -785,7 +1067,7 @@ install_monitor() {
     print_banner
 
     echo -e "${WHITE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${WHITE}║           INSTALLATION WIZARD - v3.0.6                     ║${NC}"
+    echo -e "${WHITE}║           INSTALLATION WIZARD - v3.0.7                     ║${NC}"
     echo -e "${WHITE}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -847,7 +1129,7 @@ install_monitor() {
     print_step $current_step $total_steps "Creating main service"
     cat > "${SERVICE_FILE}" << EOF
 [Unit]
-Description=Service Load Monitor v3.0.6
+Description=Service Load Monitor v3.0.7
 After=network.target
 
 [Service]
@@ -891,7 +1173,12 @@ EOF
     echo "  • Dashboard: ${DASHBOARD_DIR}"
     echo "  • DNS Services: ${#dns_services[@]}"
     echo ""
-    echo -e "${GREEN}Thank you for using Service Load Monitor v3.0.6!${NC}"
+    echo -e "${WHITE}Commands:${NC}"
+    echo -e "  • Check updater logs: ${GREEN}tail -f ${UPDATER_LOG}${NC}"
+    echo -e "  • Check service status: ${GREEN}systemctl status service-monitor-updater.service${NC}"
+    echo -e "  • View dashboard: ${GREEN}http://${ip}:${DEFAULT_DASHBOARD_PORT}/${NC}"
+    echo ""
+    echo -e "${GREEN}Thank you for using Service Load Monitor v3.0.7!${NC}"
     echo ""
 }
 
@@ -902,7 +1189,7 @@ EOF
 remove_monitor() {
     print_banner
     echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║              REMOVAL WIZARD - v3.0.6                       ║${NC}"
+    echo -e "${RED}║              REMOVAL WIZARD - v3.0.7                       ║${NC}"
     echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -936,6 +1223,7 @@ remove_monitor() {
     print_info "Removing files..."
     rm -f "${MONITOR_SCRIPT}" "${SERVICE_FILE}" "${DASHBOARD_SCRIPT}"
     rm -f "${DASHBOARD_HTTP_SERVICE}" "${DASHBOARD_UPDATER_SERVICE}"
+    rm -f "${VERSION_FILE}"
 
     if [[ "${remove_data}" =~ ^[Yy]$ ]]; then
         rm -rf "${CONFIG_BASE_DIR}" "${LIB_BASE_DIR}" "${DASHBOARD_DIR}"
@@ -954,23 +1242,45 @@ remove_monitor() {
 show_status() {
     print_banner
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${WHITE}                    SYSTEM STATUS - v3.0.6${NC}"
+    echo -e "${WHITE}                    SYSTEM STATUS - v3.0.7${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
     echo -e "${WHITE}Service Status:${NC}"
 
-    systemctl is-active --quiet service-monitor.service && \
-        echo -e "  • ${GREEN}●${NC} Monitor Service: Running" || \
+    if systemctl is-active --quiet service-monitor.service 2>/dev/null; then
+        echo -e "  • ${GREEN}●${NC} Monitor Service: Running"
+    else
         echo -e "  • ${RED}○${NC} Monitor Service: Stopped"
+    fi
 
-    systemctl is-active --quiet service-monitor-http.service && \
-        echo -e "  • ${GREEN}●${NC} HTTP Server: Running" || \
+    if systemctl is-active --quiet service-monitor-http.service 2>/dev/null; then
+        echo -e "  • ${GREEN}●${NC} HTTP Server: Running (port ${DEFAULT_DASHBOARD_PORT})"
+    else
         echo -e "  • ${RED}○${NC} HTTP Server: Stopped"
+    fi
 
-    systemctl is-active --quiet service-monitor-updater.service && \
-        echo -e "  • ${GREEN}●${NC} Updater Service: Running" || \
+    if systemctl is-active --quiet service-monitor-updater.service 2>/dev/null; then
+        echo -e "  • ${GREEN}●${NC} Updater Service: Running"
+        # Show last few lines of updater log
+        if [[ -f "${UPDATER_LOG}" ]]; then
+            echo -e "  • Last updater log entries:"
+            tail -3 "${UPDATER_LOG}" 2>/dev/null | sed 's/^/    /'
+        fi
+    else
         echo -e "  • ${RED}○${NC} Updater Service: Stopped"
+    fi
+
+    # Pi-hole info
+    if command -v pihole &>/dev/null; then
+        echo ""
+        echo -e "${WHITE}Pi-hole Information:${NC}"
+        if systemctl is-active --quiet pihole-FTL.service 2>/dev/null; then
+            echo -e "  • ${GREEN}●${NC} Pi-hole FTL: Running"
+        else
+            echo -e "  • ${RED}○${NC} Pi-hole FTL: Stopped"
+        fi
+    fi
 
     echo ""
     echo -e "${WHITE}Version:${NC} ${SCRIPT_VERSION}"
@@ -997,12 +1307,44 @@ show_logs() {
 print_banner() {
     clear
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${WHITE}           SERVICE LOAD MONITOR v3.0.6                   ${BLUE}║${NC}"
+    echo -e "${BLUE}║${WHITE}           SERVICE LOAD MONITOR v3.0.7                   ${BLUE}║${NC}"
     echo -e "${BLUE}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${BLUE}║${GREEN}  Author:  Wael Isa                                      ${BLUE}║${NC}"
-    echo -e "${BLUE}║${GREEN}  Version: 3.0.6                                         ${BLUE}║${NC}"
+    echo -e "${BLUE}║${GREEN}  Version: 3.0.7                                         ${BLUE}║${NC}"
     echo -e "${BLUE}║${GREEN}  Website: https://www.wael.name                         ${BLUE}║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+# =============================================================================
+# FEATURES FUNCTION
+# =============================================================================
+
+show_features() {
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${WHITE}               FEATURE HIGHLIGHTS v3.0.7${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${GREEN}🛡️  Pi-hole Integration (FIXED)${NC}"
+    echo "  • Real-time query statistics"
+    echo "  • Blocked domains counter"
+    echo "  • Block percentage calculation"
+    echo "  • Multiple log format support"
+    echo "  • pihole command fallback"
+    echo ""
+    echo -e "${GREEN}🌐 DNS Service Integration${NC}"
+    echo "  • Pi-hole FTL"
+    echo "  • Unbound"
+    echo "  • DNSCrypt-Proxy"
+    echo "  • dnsmasq"
+    echo "  • BIND9"
+    echo ""
+    echo -e "${GREEN}📊 Enhanced Monitoring${NC}"
+    echo "  • Bash array config support"
+    echo "  • Multiple service name matching"
+    echo "  • Improved PID detection"
+    echo "  • Atomic JSON writes"
+    echo "  • Detailed logging"
     echo ""
 }
 
@@ -1021,6 +1363,8 @@ backup_existing() {
     [[ -f "${MONITOR_SCRIPT}" ]] && cp "${MONITOR_SCRIPT}" "${backup_path}/" 2>/dev/null
     [[ -f "${DASHBOARD_SCRIPT}" ]] && cp "${DASHBOARD_SCRIPT}" "${backup_path}/" 2>/dev/null
     [[ -f "${SERVICE_FILE}" ]] && cp "${SERVICE_FILE}" "${backup_path}/" 2>/dev/null
+    [[ -f "${DASHBOARD_HTTP_SERVICE}" ]] && cp "${DASHBOARD_HTTP_SERVICE}" "${backup_path}/" 2>/dev/null
+    [[ -f "${DASHBOARD_UPDATER_SERVICE}" ]] && cp "${DASHBOARD_UPDATER_SERVICE}" "${backup_path}/" 2>/dev/null
 
     echo "${backup_id}"
 }
@@ -1043,9 +1387,72 @@ restore_from_backup() {
     [[ -d "${backup_path}/service-monitor" ]] && cp -r "${backup_path}/service-monitor" "${CONFIG_BASE_DIR%/*}/" 2>/dev/null
     [[ -f "${backup_path}/service-monitor.sh" ]] && cp "${backup_path}/service-monitor.sh" "${BASE_DIR}/" 2>/dev/null && chmod +x "${BASE_DIR}/service-monitor.sh"
     [[ -f "${backup_path}/service-monitor-dashboard.sh" ]] && cp "${backup_path}/service-monitor-dashboard.sh" "${BASE_DIR}/" 2>/dev/null && chmod +x "${BASE_DIR}/service-monitor-dashboard.sh"
+    [[ -f "${backup_path}/service-monitor.service" ]] && cp "${backup_path}/service-monitor.service" "/etc/systemd/system/" 2>/dev/null
+    [[ -f "${backup_path}/service-monitor-http.service" ]] && cp "${backup_path}/service-monitor-http.service" "/etc/systemd/system/" 2>/dev/null
+    [[ -f "${backup_path}/service-monitor-updater.service" ]] && cp "${backup_path}/service-monitor-updater.service" "/etc/systemd/system/" 2>/dev/null
 
     systemctl daemon-reload
     print_success "Restore completed"
+}
+
+# =============================================================================
+# VERSION COMPARE FUNCTION
+# =============================================================================
+
+version_compare() {
+    if [[ "$1" == "$2" ]]; then
+        echo "equal"
+        return 0
+    fi
+
+    local IFS=.
+    local i ver1=($1) ver2=($2)
+
+    for ((i=${#ver1[@]}; i<${#ver2[@]}; i++)); do
+        ver1[i]=0
+    done
+    for ((i=${#ver2[@]}; i<${#ver1[@]}; i++)); do
+        ver2[i]=0
+    done
+
+    for ((i=0; i<${#ver1[@]}; i++)); do
+        if [[ -z "${ver2[i]}" ]]; then
+            ver2[i]=0
+        fi
+        if ((10#${ver1[i]} > 10#${ver2[i]})); then
+            echo "newer"
+            return 0
+        fi
+        if ((10#${ver1[i]} < 10#${ver2[i]})); then
+            echo "older"
+            return 0
+        fi
+    done
+
+    echo "equal"
+}
+
+check_existing_installation() {
+    local installed_version=""
+    local has_old_files=false
+
+    if [[ -f "${VERSION_FILE}" ]]; then
+        installed_version=$(cat "${VERSION_FILE}")
+    fi
+
+    if [[ -f "${SERVICE_FILE}" ]]; then
+        has_old_files=true
+    fi
+
+    echo "${installed_version}|${has_old_files}"
+}
+
+migrate_configuration() {
+    print_info "Migrating existing configuration..."
+    local backup_id=$(backup_existing "pre-migration")
+    print_substep "Pre-migration backup created: ${backup_id}"
+    echo "${SCRIPT_VERSION}" > "${VERSION_FILE}"
+    print_success "Migration completed"
 }
 
 # =============================================================================
@@ -1056,15 +1463,16 @@ show_menu() {
     print_banner
     echo -e "${WHITE}Main Menu:${NC}"
     echo ""
-    echo "  1) Install/Update Monitor (v3.0.6)"
+    echo "  1) Install/Update Monitor (v3.0.7)"
     echo "  2) Remove Monitor"
     echo "  3) Show Status"
     echo "  4) View Logs"
     echo "  5) Create Backup"
     echo "  6) Restore from Backup"
-    echo "  7) Exit"
+    echo "  7) Show Features"
+    echo "  8) Exit"
     echo ""
-    echo -n -e "${YELLOW}Select option [1-7]: ${NC}"
+    echo -n -e "${YELLOW}Select option [1-8]: ${NC}"
 }
 
 # =============================================================================
@@ -1074,11 +1482,24 @@ show_menu() {
 main() {
     if [[ $# -gt 0 ]]; then
         case "$1" in
-            install) install_monitor ;;
-            remove) remove_monitor ;;
-            status) show_status ;;
-            logs) show_logs ;;
-            backup) check_sudo && backup_existing "manual" && echo "" && print_success "Backup created" ;;
+            install)
+                install_monitor
+                ;;
+            remove)
+                remove_monitor
+                ;;
+            status)
+                show_status
+                ;;
+            logs)
+                show_logs
+                ;;
+            backup)
+                check_sudo
+                backup_existing "manual"
+                echo ""
+                print_success "Backup created"
+                ;;
             restore)
                 check_sudo
                 echo "Available backups:"
@@ -1088,11 +1509,34 @@ main() {
                 read -r backup_id
                 restore_from_backup "${backup_id}"
                 ;;
-            version) echo "Service Load Monitor v${SCRIPT_VERSION}" ;;
-            help) echo "Commands: install, remove, status, logs, backup, restore, version" ;;
-            *) echo "Unknown command: $1"; exit 1 ;;
+            version)
+                echo "Service Load Monitor v${SCRIPT_VERSION}"
+                ;;
+            features)
+                show_features
+                ;;
+            help)
+                echo "Commands: install, remove, status, logs, backup, restore, version, features"
+                ;;
+            *)
+                echo "Unknown command: $1"
+                exit 1
+                ;;
         esac
         exit 0
+    fi
+
+    # Check for existing installation
+    local existing=$(check_existing_installation)
+    local old_ver="${existing%|*}"
+
+    if [[ -n "$old_ver" ]] && [[ "$old_ver" != "$SCRIPT_VERSION" ]]; then
+        local comparison=$(version_compare "$SCRIPT_VERSION" "$old_ver")
+        if [[ "$comparison" == "newer" ]]; then
+            echo -e "${YELLOW}New version available: $old_ver -> $SCRIPT_VERSION${NC}"
+            echo -e "${YELLOW}Run './service-load-monitor.sh install' to update${NC}"
+            echo ""
+        fi
     fi
 
     while true; do
@@ -1100,10 +1544,21 @@ main() {
         read -r choice
 
         case "${choice}" in
-            1) install_monitor; read -p "Press Enter to continue..." ;;
-            2) remove_monitor; read -p "Press Enter to continue..." ;;
-            3) show_status; read -p "Press Enter to continue..." ;;
-            4) show_logs ;;
+            1)
+                install_monitor
+                read -p "Press Enter to continue..."
+                ;;
+            2)
+                remove_monitor
+                read -p "Press Enter to continue..."
+                ;;
+            3)
+                show_status
+                read -p "Press Enter to continue..."
+                ;;
+            4)
+                show_logs
+                ;;
             5)
                 if check_sudo; then
                     backup_existing "manual"
@@ -1127,8 +1582,20 @@ main() {
                 fi
                 read -p "Press Enter to continue..."
                 ;;
-            7) echo -e "\n${GREEN}Goodbye!${NC}\n"; exit 0 ;;
-            *) echo -e "${RED}Invalid option${NC}"; sleep 2 ;;
+            7)
+                print_banner
+                show_features
+                read -p "Press Enter to continue..."
+                ;;
+            8)
+                echo -e "\n${GREEN}Thank you for using Service Load Monitor v3.0.7!${NC}"
+                echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}\n"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid option${NC}"
+                sleep 2
+                ;;
         esac
     done
 }
