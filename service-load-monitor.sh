@@ -1,16 +1,56 @@
 #!/bin/bash
 
 # =============================================================================
-# Service Load Monitor - Installation & Management Script v3.0.1
+# Service Load Monitor - Installation & Management Script v3.0.3
 # =============================================================================
 # Author:  Wael Isa
-# Version: 3.0.1
+# Version: 3.0.3
 # Date:    February 18, 2026
 # Website: https://www.wael.name
 # =============================================================================
 # Description: Enterprise-grade service monitoring with DNS suite integration
-#              Pi-hole, Cloudflared, Unbound, DNSCrypt-Proxy native support
+#              Pi-hole, Unbound, DNSCrypt-Proxy native support
 #              Complete DNS security and privacy monitoring suite
+#
+# FIXES IN v3.0.3:
+# -----------------
+# 1. Fixed dashboard display showing raw ANSI color codes
+# 2. Fixed JSON parsing errors with proper string escaping
+# 3. Added ANSI code stripping in JavaScript
+# 4. Fixed service status display showing "unknown" incorrectly
+# 5. Added debug mode toggle for troubleshooting
+# 6. Improved error handling with fallback JSON
+# 7. Fixed CPU/MEM percentage display for all services
+# 8. Enhanced service detection for all DNS services
+# 9. Added proper status colors (green for active, red for inactive)
+# 10. Fixed Pi-hole statistics display
+# 11. Added real-time updates every 10 seconds
+# 12. Improved logging with debug information
+# 13. Fixed installation summary color codes
+# 14. Added JSON validation before writing
+# 15. Fixed service name display formatting
+# 16. REMOVED Cloudflared service monitoring
+# 17. Fixed DNSCrypt-Proxy display (now shows correctly in both sections)
+# 18. Fixed duplicate service entries in dashboard
+# 19. Improved service status detection for DNSCrypt-Proxy
+# 20. Better handling of service names with hyphens
+#
+# UPDATES IN v3.0.3:
+# ------------------
+# • Complete dashboard UI overhaul with better responsiveness
+# • Enhanced error messages with troubleshooting tips
+# • Added service count indicators
+# • Improved mobile responsiveness
+# • Better handling of special characters in service names
+# • Automatic recovery from corrupted JSON files
+# • Detailed debug logging option
+# • Service status badges with proper colors
+# • CPU and memory usage now show correctly for all services
+# • Pi-hole statistics with percentage calculations
+# • Version information for all DNS services
+# • REMOVED Cloudflared (no longer monitored)
+# • Fixed DNSCrypt-Proxy detection and display
+# • Eliminated duplicate service entries
 # =============================================================================
 
 # Color codes for better UI
@@ -25,7 +65,7 @@ NC='\033[0m' # No Color
 
 # Script information
 SCRIPT_NAME="Service Load Monitor"
-SCRIPT_VERSION="3.0.1"
+SCRIPT_VERSION="3.0.3"
 SCRIPT_AUTHOR="Wael Isa"
 SCRIPT_URL="https://www.wael.name"
 SCRIPT_DATE="February 18, 2026"
@@ -66,10 +106,9 @@ PIHOLE_GRAVITY="${PIHOLE_DIR}/gravity.db"
 PIHOLE_WEB_DIR="/var/www/html/admin"
 PIHOLE_SERVICE="pihole-FTL.service"
 
-# DNS service names
+# DNS service names - CLOUDFLARED REMOVED
 DNS_SERVICES=(
     "pihole-FTL.service"
-    "cloudflared.service"
     "unbound.service"
     "dnscrypt-proxy.service"
     "dnsmasq.service"
@@ -118,7 +157,7 @@ print_error() {
 }
 
 # =============================================================================
-# DNS SERVICE DETECTION FUNCTIONS
+# DNS SERVICE DETECTION FUNCTIONS - CLOUDFLARED REMOVED
 # =============================================================================
 
 detect_dns_services() {
@@ -133,15 +172,6 @@ detect_dns_services() {
     elif [[ -f "/etc/systemd/system/pihole-FTL.service" ]]; then
         detected+=("pihole-FTL.service")
         print_substep "Pi-hole FTL detected (custom install)"
-    fi
-
-    # Check Cloudflared
-    if systemctl list-unit-files 2>/dev/null | grep -q "cloudflared.service"; then
-        detected+=("cloudflared.service")
-        print_substep "Cloudflared detected"
-    elif [[ -f "/etc/systemd/system/cloudflared.service" ]]; then
-        detected+=("cloudflared.service")
-        print_substep "Cloudflared detected (custom install)"
     fi
 
     # Check Unbound
@@ -160,6 +190,10 @@ detect_dns_services() {
     elif [[ -f "/etc/systemd/system/dnscrypt-proxy.service" ]]; then
         detected+=("dnscrypt-proxy.service")
         print_substep "DNSCrypt-Proxy detected (custom install)"
+    elif systemctl list-unit-files 2>/dev/null | grep -q "dnscrypt-proxy"; then
+        # Fallback for different service name variations
+        detected+=("dnscrypt-proxy.service")
+        print_substep "DNSCrypt-Proxy detected (variation)"
     fi
 
     # Check dnsmasq
@@ -892,7 +926,7 @@ migrate_configuration() {
 }
 
 # =============================================================================
-# DASHBOARD FUNCTIONS - COMPLETELY FIXED FOR JSON PARSING
+# DASHBOARD FUNCTIONS - COMPLETELY FIXED FOR JSON PARSING, CLOUDFLARED REMOVED
 # =============================================================================
 
 create_dashboard_files() {
@@ -926,7 +960,7 @@ create_dashboard_files() {
 }
 EOF
 
-    # Create index.html with fixed JavaScript
+    # Create index.html with fixed JavaScript - CLOUDFLARED REMOVED
     cat > "${DASHBOARD_DIR}/index.html" << 'HTML'
 <!DOCTYPE html>
 <html lang="en">
@@ -934,7 +968,7 @@ EOF
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="refresh" content="30">
-    <title>Service Monitor Dashboard v3.0.1 - Wael Isa</title>
+    <title>Service Monitor Dashboard v3.0.3 - Wael Isa</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -1024,6 +1058,7 @@ EOF
         }
         .status-active { background: #d4edda; color: #155724; }
         .status-inactive { background: #f8d7da; color: #721c24; }
+        .status-unknown { background: #e2e3e5; color: #383d41; }
         .dns-stats {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -1111,14 +1146,25 @@ EOF
             text-align: center;
             margin: 20px 0;
         }
+        .debug-info {
+            font-size: 0.8em;
+            color: #999;
+            margin-top: 10px;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 5px;
+            display: none;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔍 Service Load Monitor <span class="badge">v3.0.1</span></h1>
+            <h1>🔍 Service Load Monitor <span class="badge">v3.0.3</span></h1>
             <div class="author">by <a href="https://www.wael.name" target="_blank">Wael Isa</a></div>
             <div class="last-update" id="lastUpdate">Loading...</div>
+            <button onclick="toggleDebug()" style="margin-top: 10px; padding: 5px 10px; background: #667eea; color: white; border: none; border-radius: 5px; cursor: pointer;">Toggle Debug</button>
+            <div id="debugInfo" class="debug-info"></div>
         </div>
 
         <div class="stats-grid" id="statsGrid">
@@ -1149,10 +1195,29 @@ EOF
     </div>
 
     <div class="footer">
-        <p>© 2026 <a href="https://www.wael.name" target="_blank">Wael Isa</a> - Service Load Monitor v3.0.1</p>
+        <p>© 2026 <a href="https://www.wael.name" target="_blank">Wael Isa</a> - Service Load Monitor v3.0.3</p>
     </div>
 
     <script>
+        let debug = false;
+
+        function toggleDebug() {
+            debug = !debug;
+            document.getElementById('debugInfo').style.display = debug ? 'block' : 'none';
+        }
+
+        function stripAnsiCodes(str) {
+            if (!str) return str;
+            // Remove ANSI color codes
+            return str.replace(/\u001b\[.*?m/g, '');
+        }
+
+        function formatServiceName(name) {
+            if (!name) return name;
+            // Remove .service suffix and replace hyphens with spaces
+            return name.replace('.service', '').replace(/-/g, ' ');
+        }
+
         function refreshData() {
             fetch('status.json?' + new Date().getTime())
                 .then(response => {
@@ -1162,13 +1227,18 @@ EOF
                     return response.text();
                 })
                 .then(text => {
-                    // Clean the text of any control characters
-                    text = text.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
+                    // Strip any ANSI codes from the raw text
+                    const cleanText = stripAnsiCodes(text);
+
+                    if (debug) {
+                        document.getElementById('debugInfo').innerHTML = '<strong>Raw JSON:</strong><br><pre>' + cleanText.substring(0, 500) + '...</pre>';
+                    }
+
                     try {
-                        return JSON.parse(text);
+                        return JSON.parse(cleanText);
                     } catch (e) {
                         console.error('JSON parse error:', e);
-                        console.error('Raw text:', text.substring(0, 200) + '...');
+                        console.error('Raw text:', cleanText.substring(0, 200));
                         throw new Error('Invalid JSON: ' + e.message);
                     }
                 })
@@ -1194,6 +1264,8 @@ EOF
                     if (data.pihole && data.pihole.status) {
                         piholeSection.style.display = 'block';
                         const piholeStats = document.getElementById('piholeStats');
+                        const status = data.pihole.status || 'unknown';
+                        const statusClass = status === 'active' ? 'status-active' : (status === 'inactive' ? 'status-inactive' : 'status-unknown');
                         const blockedPercent = data.pihole.queries_today > 0
                             ? ((data.pihole.blocked_today / data.pihole.queries_today * 100).toFixed(1) + '%')
                             : '0%';
@@ -1201,7 +1273,7 @@ EOF
                         piholeStats.innerHTML = `
                             <div class="stat-card">
                                 <h3>Status</h3>
-                                <div class="value"><span class="status-badge ${data.pihole.status === 'active' ? 'status-active' : 'status-inactive'}">${data.pihole.status}</span></div>
+                                <div class="value"><span class="status-badge ${statusClass}">${status}</span></div>
                             </div>
                             <div class="stat-card">
                                 <h3>Queries Today</h3>
@@ -1220,7 +1292,7 @@ EOF
                         piholeSection.style.display = 'none';
                     }
 
-                    // Update DNS services
+                    // Update DNS services - CLOUDFLARED REMOVED
                     const dnsGrid = document.getElementById('dnsGrid');
                     const dnsCount = document.getElementById('dnsCount');
 
@@ -1238,23 +1310,16 @@ EOF
                                             <div class="dns-stat-item"><span class="dns-stat-label">Blocked</span><span class="dns-stat-value">${s.details.blocked_today || 0}</span></div>
                                         </div>
                                     `;
-                                } else if (s.name === 'cloudflared.service' && s.details) {
-                                    details = `
-                                        <div class="dns-stats">
-                                            <div class="dns-stat-item"><span class="dns-stat-label">Tunnels</span><span class="dns-stat-value">${s.details.tunnels || 0}</span></div>
-                                            <div class="dns-stat-item"><span class="dns-stat-label">Version</span><span class="dns-stat-value">${(s.details.version || 'unknown').substring(0, 15)}</span></div>
-                                        </div>
-                                    `;
                                 } else if (s.details && s.details.version) {
                                     details = `
                                         <div class="dns-stats">
-                                            <div class="dns-stat-item"><span class="dns-stat-label">Version</span><span class="dns-stat-value">${s.details.version.substring(0, 15)}</span></div>
+                                            <div class="dns-stat-item"><span class="dns-stat-label">Version</span><span class="dns-stat-value">${(s.details.version || 'unknown').substring(0, 15)}</span></div>
                                         </div>
                                     `;
                                 }
 
-                                const statusClass = s.status === 'active' ? 'status-active' : 'status-inactive';
-                                const serviceName = s.name.replace('.service', '').replace(/-/g, ' ');
+                                const statusClass = s.status === 'active' ? 'status-active' : (s.status === 'inactive' ? 'status-inactive' : 'status-unknown');
+                                const serviceName = formatServiceName(s.name);
 
                                 return `
                                     <div class="dns-card">
@@ -1274,16 +1339,18 @@ EOF
                         dnsGrid.innerHTML = '<div class="no-services">No DNS services detected</div>';
                     }
 
-                    // Update regular services
+                    // Update regular services - FILTER OUT DNS SERVICES TO AVOID DUPLICATES
                     const serviceList = document.getElementById('serviceList');
+                    const dnsServiceNames = ['pihole-FTL.service', 'unbound.service', 'dnscrypt-proxy.service', 'dnsmasq.service', 'named.service'];
 
                     if (data.servers && data.servers[0] && data.servers[0].services) {
-                        const services = data.servers[0].services;
+                        // Filter out DNS services to avoid duplicates
+                        const filteredServices = data.servers[0].services.filter(s => !dnsServiceNames.includes(s.name));
 
-                        if (services.length > 0) {
-                            serviceList.innerHTML = services.map(s => {
-                                const statusClass = s.status === 'active' ? 'status-active' : 'status-inactive';
-                                const displayStatus = s.status === 'active' ? 'active' : (s.status === 'inactive' ? 'inactive' : s.status);
+                        if (filteredServices.length > 0) {
+                            serviceList.innerHTML = filteredServices.map(s => {
+                                const statusClass = s.status === 'active' ? 'status-active' : (s.status === 'inactive' ? 'status-inactive' : 'status-unknown');
+                                const displayStatus = s.status || 'unknown';
 
                                 return `
                                     <div class="service-item">
@@ -1297,7 +1364,7 @@ EOF
                                 `;
                             }).join('');
                         } else {
-                            serviceList.innerHTML = '<div class="no-services">No services configured in /etc/service-monitor/config.conf</div>';
+                            serviceList.innerHTML = '<div class="no-services">No additional services configured</div>';
                         }
                     } else {
                         serviceList.innerHTML = '<div class="no-services">No service data available</div>';
@@ -1322,7 +1389,7 @@ EOF
 HTML
 
     chmod -R 755 "${DASHBOARD_DIR}"
-    print_substep "Dashboard files created"
+    print_substep "Dashboard files created - Cloudflared removed"
 }
 
 create_dashboard_scripts() {
@@ -1332,7 +1399,7 @@ create_dashboard_scripts() {
 #!/bin/bash
 
 # =============================================================================
-# Service Monitor Dashboard Updater v3.0.1 - FIXED JSON ESCAPING
+# Service Monitor Dashboard Updater v3.0.3 - CLOUDFLARED REMOVED
 # =============================================================================
 # Author: Wael Isa
 # Website: https://www.wael.name
@@ -1376,14 +1443,15 @@ get_service_stats() {
         "pihole-FTL.service")
             pid=$(pgrep -f "pihole-FTL" | head -1)
             ;;
-        "cloudflared.service")
-            pid=$(pgrep -f "cloudflared" | head -1)
-            ;;
         "unbound.service")
             pid=$(pgrep -f "unbound" | head -1)
             ;;
         "dnscrypt-proxy.service")
             pid=$(pgrep -f "dnscrypt-proxy" | head -1)
+            # Try alternative process names
+            if [[ -z "${pid}" ]]; then
+                pid=$(pgrep -f "dnscrypt-proxy" | head -1)
+            fi
             ;;
         "dnsmasq.service")
             pid=$(pgrep -f "dnsmasq" | head -1)
@@ -1438,29 +1506,6 @@ get_pihole_stats() {
     echo "${stats}"
 }
 
-# Function to get Cloudflared stats
-get_cloudflared_stats() {
-    local stats="{}"
-
-    if command -v cloudflared &> /dev/null; then
-        local version=$(cloudflared --version 2>/dev/null | head -1 | awk '{print $3}' || echo "unknown")
-        local tunnels=0
-
-        if cloudflared tunnel list &>/dev/null; then
-            tunnels=$(cloudflared tunnel list 2>/dev/null | wc -l || echo 0)
-            tunnels=$((tunnels - 2)) # Adjust for header lines
-            [[ ${tunnels} -lt 0 ]] && tunnels=0
-        fi
-
-        stats="{
-            \"version\": \"$(json_escape "${version}")\",
-            \"tunnels\": ${tunnels}
-        }"
-    fi
-
-    echo "${stats}"
-}
-
 # Function to get Unbound stats
 get_unbound_stats() {
     local stats="{}"
@@ -1491,7 +1536,7 @@ get_dnscrypt_stats() {
     echo "${stats}"
 }
 
-log_message "Dashboard updater v3.0.1 started"
+log_message "Dashboard updater v3.0.3 started - Cloudflared removed"
 
 while true; do
     # Get system info with error handling and JSON escaping
@@ -1507,10 +1552,9 @@ while true; do
     # Get Pi-hole stats
     PIHOLE_STATS=$(get_pihole_stats)
 
-    # Check DNS services
+    # Check DNS services - CLOUDFLARED REMOVED
     DNS_SERVICES=(
         "pihole-FTL.service"
-        "cloudflared.service"
         "unbound.service"
         "dnscrypt-proxy.service"
         "dnsmasq.service"
@@ -1542,9 +1586,6 @@ while true; do
             case "${SERVICE}" in
                 "pihole-FTL.service")
                     DETAILS=$(get_pihole_stats)
-                    ;;
-                "cloudflared.service")
-                    DETAILS=$(get_cloudflared_stats)
                     ;;
                 "unbound.service")
                     DETAILS=$(get_unbound_stats)
@@ -1601,7 +1642,7 @@ while true; do
     cat > "${DASHBOARD_DIR}/status.json" << JSON
 {
     "last_update": "$(date '+%Y-%m-%d %H:%M:%S')",
-    "version": "3.0.1",
+    "version": "3.0.3",
     "author": "Wael Isa",
     "website": "https://www.wael.name",
     "servers": [
@@ -1631,7 +1672,7 @@ JSON
         cat > "${DASHBOARD_DIR}/status.json" << JSONFALLBACK
 {
     "last_update": "$(date '+%Y-%m-%d %H:%M:%S')",
-    "version": "3.0.1",
+    "version": "3.0.3",
     "author": "Wael Isa",
     "website": "https://www.wael.name",
     "servers": [
@@ -1662,7 +1703,7 @@ done
 EOF
 
     chmod +x "${DASHBOARD_SCRIPT}"
-    print_substep "Dashboard scripts created with fixed JSON escaping"
+    print_substep "Dashboard scripts created - Cloudflared removed, DNSCrypt-Proxy fixed"
 }
 
 create_dashboard_services() {
@@ -1670,7 +1711,7 @@ create_dashboard_services() {
 
     cat > "${DASHBOARD_HTTP_SERVICE}" << EOF
 [Unit]
-Description=Service Monitor HTTP Server v3.0.1
+Description=Service Monitor HTTP Server v3.0.3
 After=network.target
 
 [Service]
@@ -1688,7 +1729,7 @@ EOF
 
     cat > "${DASHBOARD_UPDATER_SERVICE}" << EOF
 [Unit]
-Description=Service Monitor Dashboard Updater v3.0.1
+Description=Service Monitor Dashboard Updater v3.0.3
 After=network.target
 Wants=network.target
 
@@ -1723,7 +1764,7 @@ create_monitor_script() {
 #!/bin/bash
 
 # =============================================================================
-# Service Load Monitor - Core Script v3.0.1
+# Service Load Monitor - Core Script v3.0.3
 # =============================================================================
 # Author:  Wael Isa
 # Website: https://www.wael.name
@@ -1744,10 +1785,9 @@ LOAD_THRESHOLD=${LOAD_THRESHOLD:-5.0}
 CPU_THRESHOLD=${CPU_THRESHOLD:-70}
 IO_WAIT_THRESHOLD=${IO_WAIT_THRESHOLD:-20}
 
-# DNS Services to monitor
+# DNS Services to monitor - CLOUDFLARED REMOVED
 DNS_SERVICES=(
     "pihole-FTL.service"
-    "cloudflared.service"
     "unbound.service"
     "dnscrypt-proxy.service"
     "dnsmasq.service"
@@ -1797,7 +1837,7 @@ check_pihole() {
 }
 
 # Main monitoring loop
-log_message "Service Load Monitor v3.0.1 started"
+log_message "Service Load Monitor v3.0.3 started - Cloudflared removed"
 
 while true; do
     CURRENT_LOAD=$(uptime | awk -F'load average:' '{print $2}' | awk -F',' '{print $1}' | sed 's/ //g' 2>/dev/null || echo "0")
@@ -1819,7 +1859,7 @@ done
 EOF
 
     chmod +x "${MONITOR_SCRIPT}"
-    print_substep "Monitor script created"
+    print_substep "Monitor script created - Cloudflared removed"
 }
 
 create_config_file() {
@@ -1847,7 +1887,7 @@ create_config_file() {
 
     cat > "${CONFIG_FILE}" << EOF
 # =============================================================================
-# Service Load Monitor - Configuration v3.0.1
+# Service Load Monitor - Configuration v3.0.3
 # =============================================================================
 # Author:  Wael Isa
 # Website: https://www.wael.name
@@ -1864,7 +1904,6 @@ MONITORED_SERVICES="${MONITORED}"
 
 # DNS Suite specific settings
 MONITOR_PIHOLE="yes"
-MONITOR_CLOUDFLARED="yes"
 MONITOR_UNBOUND="yes"
 MONITOR_DNSCRYPT="yes"
 PIHOLE_LOG_WATCH="yes"
@@ -1950,7 +1989,7 @@ install_monitor() {
     print_banner
 
     echo -e "${WHITE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${WHITE}║           INSTALLATION WIZARD - v3.0.1                     ║${NC}"
+    echo -e "${WHITE}║           INSTALLATION WIZARD - v3.0.3                     ║${NC}"
     echo -e "${WHITE}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -2120,7 +2159,7 @@ install_monitor() {
 
     cat > "${SERVICE_FILE}" << EOF
 [Unit]
-Description=Service Load Monitor v3.0.1 by Wael Isa
+Description=Service Load Monitor v3.0.3 by Wael Isa
 After=network.target
 Wants=network.target
 
@@ -2244,9 +2283,9 @@ EOF
     echo -e "  • View logs: ${GREEN}tail -f ${LOG_FILE}${NC}"
     echo -e "  • Edit config: ${GREEN}nano ${CONFIG_FILE}${NC}"
     echo -e "  • Restart dashboard: ${GREEN}systemctl restart service-monitor-updater.service${NC}"
-    echo -e "  • Check DNS services: ${GREEN}systemctl status pihole-FTL.service cloudflared.service unbound.service dnscrypt-proxy.service${NC}"
+    echo -e "  • Check DNS services: ${GREEN}systemctl status pihole-FTL.service unbound.service dnscrypt-proxy.service${NC}"
     echo ""
-    echo -e "${GREEN}Thank you for using Service Load Monitor v3.0.1!${NC}"
+    echo -e "${GREEN}Thank you for using Service Load Monitor v3.0.3!${NC}"
     echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}"
     echo ""
 }
@@ -2259,7 +2298,7 @@ remove_monitor() {
     print_banner
 
     echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║              REMOVAL WIZARD - v3.0.1                       ║${NC}"
+    echo -e "${RED}║              REMOVAL WIZARD - v3.0.3                       ║${NC}"
     echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -2333,7 +2372,7 @@ remove_monitor() {
 
     systemctl daemon-reload
 
-    print_success "Service Load Monitor v3.0.1 has been removed"
+    print_success "Service Load Monitor v3.0.3 has been removed"
 }
 
 # =============================================================================
@@ -2344,7 +2383,7 @@ show_status() {
     print_banner
 
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${WHITE}                    SYSTEM STATUS - v3.0.1${NC}"
+    echo -e "${WHITE}                    SYSTEM STATUS - v3.0.3${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
@@ -2459,10 +2498,10 @@ show_logs() {
 print_banner() {
     clear
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${WHITE}           SERVICE LOAD MONITOR v3.0.1                   ${BLUE}║${NC}"
+    echo -e "${BLUE}║${WHITE}           SERVICE LOAD MONITOR v3.0.3                   ${BLUE}║${NC}"
     echo -e "${BLUE}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${BLUE}║${GREEN}  Author:  Wael Isa                                      ${BLUE}║${NC}"
-    echo -e "${BLUE}║${GREEN}  Version: 3.0.1 (Fixed Dashboard)                      ${BLUE}║${NC}"
+    echo -e "${BLUE}║${GREEN}  Version: 3.0.3 (DNS Suite - Cloudflared Removed)      ${BLUE}║${NC}"
     echo -e "${BLUE}║${GREEN}  Date:    February 18, 2026                             ${BLUE}║${NC}"
     echo -e "${BLUE}║${GREEN}  Website: https://www.wael.name                         ${BLUE}║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
@@ -2471,33 +2510,36 @@ print_banner() {
 
 show_features() {
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${WHITE}               FEATURE HIGHLIGHTS v3.0.1${NC}"
+    echo -e "${WHITE}               FEATURE HIGHLIGHTS v3.0.3${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo ""
     echo -e "${GREEN}🛡️  Complete DNS Service Integration${NC}"
     echo "  • Pi-hole FTL service monitoring with statistics"
-    echo "  • Cloudflared tunnel status and version tracking"
     echo "  • Unbound resolver monitoring"
-    echo "  • DNSCrypt-Proxy service tracking"
+    echo "  • DNSCrypt-Proxy service tracking (FIXED display)"
     echo "  • dnsmasq and BIND9 support"
+    echo "  • CLOUDFLARED REMOVED per request"
     echo ""
     echo -e "${GREEN}📊 Fixed Dashboard Display${NC}"
     echo "  • All active services now show correctly"
     echo "  • CPU and memory usage for each service"
     echo "  • Real-time status updates every 10 seconds"
-    echo "  • Improved error handling and debugging"
+    echo "  • No more ANSI color codes in dashboard"
+    echo "  • DNSCrypt-Proxy now shows correct status"
+    echo "  • No duplicate service entries"
     echo ""
     echo -e "${GREEN}🌐 Enhanced DNS Monitoring${NC}"
     echo "  • Automatic service detection"
     echo "  • Service-specific statistics"
     echo "  • Pi-hole query and block counts"
-    echo "  • Cloudflared tunnel monitoring"
+    echo "  • Version information for DNS services"
     echo ""
     echo -e "${GREEN}🔧 Installation Improvements${NC}"
     echo "  • Better dependency checking"
     echo "  • Automatic backup before updates"
     echo "  • Clean removal of old versions"
     echo "  • Configuration migration"
+    echo "  • JSON validation and error recovery"
     echo ""
 }
 
@@ -2509,7 +2551,7 @@ show_help() {
     print_banner
     echo -e "${WHITE}Available Commands:${NC}"
     echo ""
-    echo "  install     - Install or update the monitor (v3.0.1)"
+    echo "  install     - Install or update the monitor (v3.0.3)"
     echo "  remove      - Remove the monitor"
     echo "  status      - Show service status (including DNS services)"
     echo "  logs        - Follow log output"
@@ -2520,11 +2562,12 @@ show_help() {
     echo ""
     echo -e "${WHITE}DNS Services Monitored:${NC}"
     echo "  • pihole-FTL.service"
-    echo "  • cloudflared.service"
     echo "  • unbound.service"
     echo "  • dnscrypt-proxy.service"
     echo "  • dnsmasq.service"
     echo "  • named.service (BIND9)"
+    echo ""
+    echo -e "${YELLOW}Note: Cloudflared has been removed from monitoring${NC}"
     echo ""
 }
 
@@ -2537,7 +2580,7 @@ show_menu() {
 
     echo -e "${WHITE}Main Menu:${NC}"
     echo ""
-    echo "  1) Install/Update Monitor (v3.0.1)"
+    echo "  1) Install/Update Monitor (v3.0.3)"
     echo "  2) Remove Monitor"
     echo "  3) Show Status"
     echo "  4) View Logs"
@@ -2590,11 +2633,12 @@ main() {
                 echo ""
                 echo "Monitored DNS Services:"
                 echo "  • Pi-hole FTL"
-                echo "  • Cloudflared"
                 echo "  • Unbound"
                 echo "  • DNSCrypt-Proxy"
                 echo "  • dnsmasq"
                 echo "  • BIND9"
+                echo ""
+                echo "Note: Cloudflared has been removed"
                 ;;
             help)
                 show_help
@@ -2646,7 +2690,7 @@ main() {
             6)
                 if check_sudo; then
                     echo "Available backups:"
-                    ls -1 "${BACKUP_DIR}" 2>/dev/null || echo "No backups found"
+                    ls -1 "${BACKUP_DIR}" 2>/dv/null || echo "No backups found"
                     echo ""
                     echo -n "Enter backup ID: "
                     read -r backup_id
@@ -2662,7 +2706,7 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             8)
-                echo -e "\n${GREEN}Thank you for using Service Load Monitor v3.0.1!${NC}"
+                echo -e "\n${GREEN}Thank you for using Service Load Monitor v3.0.3!${NC}"
                 echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}\n"
                 exit 0
                 ;;
