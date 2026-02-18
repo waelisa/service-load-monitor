@@ -1,3 +1,5 @@
+![Service Load Monitor Dashboard](https://github.com/waelisa/service-load-monitor/blob/main/Service-Load-Monitor.png?raw=true)
+
 # **🚀 Service Load Monitor**
 
 An enterprise-grade, "self-healing" system monitoring agent for Linux. This script goes beyond simple alerts by intelligently identifying high-load processes and automatically recovering services to ensure maximum uptime.
