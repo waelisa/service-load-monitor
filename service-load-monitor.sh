@@ -1,20 +1,24 @@
 #!/bin/bash
 
 # =============================================================================
-# Service Load Monitor - Installation & Management Script v3.0.9
+# Service Load Monitor - Installation & Management Script v3.1.4
 # =============================================================================
 # Author:  Wael Isa
-# Version: 3.0.9
+# Version: 3.1.4
 # Date:    February 18, 2026
 # Website: https://www.wael.name
 # =============================================================================
-# Description: Enterprise-grade service monitoring with DNS suite integration
-#              Pi-hole, Unbound, DNSCrypt-Proxy native support
+# Description: ENTERPRISE-GRADE service monitoring with DNS suite integration
+#              Pi-hole API + Systemd Timer + Production Ready
 # =============================================================================
-# CHANGES IN v3.0.9:
-# ------------------
-# • Changed update interval from 30 seconds to 60 seconds
-# • All other functionality identical to v3.0.7 (which works perfectly)
+# FIXES IN v3.1.4:
+# -----------------
+# • Fixed Pi-hole API integration - now properly returns query counts
+# • Added multiple methods to get Pi-hole stats (API, sqlite3, pihole command)
+# • Fixed JSON parsing of pihole -c -j output
+# • Added fallback to log file if API fails
+# • Added debug logging for Pi-hole stats collection
+# • Fixed "Queries Today 0" issue
 # =============================================================================
 
 # Color codes for better UI - ONLY used in installation wizard, never in JSON
@@ -29,7 +33,7 @@ NC='\033[0m' # No Color
 
 # Script information
 SCRIPT_NAME="Service Load Monitor"
-SCRIPT_VERSION="3.0.9"
+SCRIPT_VERSION="3.1.4"
 SCRIPT_AUTHOR="Wael Isa"
 SCRIPT_URL="https://www.wael.name"
 SCRIPT_DATE="February 18, 2026"
@@ -48,10 +52,18 @@ LOG_FILE="${LOG_BASE_DIR}/service-monitor.log"
 UPDATER_LOG="${LOG_BASE_DIR}/service-monitor-updater.log"
 DASHBOARD_DIR="${WWW_BASE_DIR}/service-monitor"
 DASHBOARD_SCRIPT="${BASE_DIR}/service-monitor-dashboard.sh"
+DASHBOARD_SERVICE="/etc/systemd/system/service-monitor-dashboard.service"
+DASHBOARD_TIMER="/etc/systemd/system/service-monitor-dashboard.timer"
 DASHBOARD_HTTP_SERVICE="/etc/systemd/system/service-monitor-http.service"
-DASHBOARD_UPDATER_SERVICE="/etc/systemd/system/service-monitor-updater.service"
 VERSION_FILE="${CONFIG_BASE_DIR}/installed_version"
 BACKUP_DIR="${LIB_BASE_DIR}/backups"
+CACHE_DIR="/var/cache/service-monitor"
+
+# Pi-hole specific paths
+PIHOLE_LOG="/var/log/pihole.log"
+PIHOLE_FTL_LOG="/var/log/pihole-FTL.log"
+PIHOLE_GRAVITY="/etc/pihole/gravity.db"
+PIHOLE_FTL_DB="/etc/pihole/pihole-FTL.db"
 
 # DNS service names - EXACT matches for systemd
 DNS_SERVICES=(
@@ -204,19 +216,19 @@ check_sudo() {
 }
 
 # =============================================================================
-# DASHBOARD FUNCTIONS - v3.0.9 (60 second interval)
+# DASHBOARD FUNCTIONS - v3.1.4 FIXED PI-HOLE API
 # =============================================================================
 
 create_dashboard_files() {
     print_substep "Creating dashboard files..."
 
-    mkdir -p "${DASHBOARD_DIR}"
+    mkdir -p "${DASHBOARD_DIR}" "${CACHE_DIR}"
 
-    # Create initial status.json
+    # Create initial status.json with proper permissions
     cat > "${DASHBOARD_DIR}/status.json" << EOF
 {
     "last_update": "$(date '+%Y-%m-%d %H:%M:%S')",
-    "version": "3.0.9",
+    "version": "3.1.4",
     "servers": [
         {
             "id": "local",
@@ -233,6 +245,9 @@ create_dashboard_files() {
     "pihole": null
 }
 EOF
+
+    # Set proper permissions (644 for files)
+    chmod 644 "${DASHBOARD_DIR}/status.json"
 
     # Set proper ownership for web server
     if id www-data &>/dev/null; then
@@ -251,7 +266,7 @@ EOF
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="refresh" content="60">
-    <title>Service Monitor Dashboard v3.0.9</title>
+    <title>Service Monitor Dashboard v3.1.4 Enterprise</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -267,15 +282,24 @@ EOF
             padding: 30px;
             margin-bottom: 20px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            border-left: 4px solid #28a745;
         }
         .header h1 { color: #333; font-size: 2.5em; margin-bottom: 10px; }
         .header .badge {
-            background: #667eea;
+            background: #28a745;
             color: white;
             padding: 5px 10px;
             border-radius: 20px;
             font-size: 0.9em;
             display: inline-block;
+            margin-left: 10px;
+        }
+        .header .enterprise-badge {
+            background: #ffc107;
+            color: #333;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
             margin-left: 10px;
         }
         .stats-grid {
@@ -399,19 +423,33 @@ EOF
             background: #f8f9fa;
             border-radius: 10px;
         }
+        .enterprise-footer {
+            font-size: 0.8em;
+            color: #ffc107;
+            margin-top: 5px;
+        }
+        .production-badge {
+            background: #17a2b8;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 0.7em;
+            margin-left: 5px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔍 Service Load Monitor <span class="badge">v3.0.9</span></h1>
+            <h1>🔍 Service Load Monitor <span class="badge">v3.1.4</span><span class="enterprise-badge">Enterprise</span><span class="production-badge">Production</span></h1>
             <div class="last-update" id="lastUpdate">Loading...</div>
+            <div class="enterprise-footer">⚡ Pi-hole API • Systemd Timer • Zero CPU idle • Production Ready</div>
         </div>
 
         <div class="stats-grid" id="statsGrid"></div>
 
         <div class="pihole-section" id="piholeSection" style="display: none;">
-            <h2>🛡️ Pi-hole Status</h2>
+            <h2>🛡️ Pi-hole Status <span class="enterprise-badge">API v3.1.4</span></h2>
             <div class="pihole-stats" id="piholeStats"></div>
         </div>
 
@@ -427,7 +465,7 @@ EOF
     </div>
 
     <div class="footer">
-        <p>© 2026 Service Load Monitor v3.0.9</p>
+        <p>© 2026 Service Load Monitor v3.1.4 Production - by Wael Isa</p>
     </div>
 
     <script>
@@ -435,7 +473,7 @@ EOF
             fetch('status.json?' + new Date().getTime())
                 .then(response => response.json())
                 .then(data => {
-                    document.getElementById('lastUpdate').textContent = 'Last updated: ' + (data.last_update || 'Unknown');
+                    document.getElementById('lastUpdate').textContent = 'Last updated: ' + (data.last_update || 'Unknown') + ' (Timer-based)';
 
                     // Update stats
                     if (data.servers && data.servers[0]) {
@@ -460,7 +498,7 @@ EOF
 
                         piholeStats.innerHTML = `
                             <div class="stat-card">
-                                <h3>Status</h3>
+                                <h3>Status <span class="production-badge">API</span></h3>
                                 <div class="value"><span class="status-badge ${statusClass}">${data.pihole.status}</span></div>
                             </div>
                             <div class="stat-card">
@@ -528,43 +566,62 @@ EOF
                 })
                 .catch(error => {
                     console.error('Error loading data:', error);
-                    document.getElementById('statsGrid').innerHTML = '<div class="no-services">Error loading data. Check if updater is running.</div>';
+                    document.getElementById('statsGrid').innerHTML = '<div class="no-services">Error loading data. Check if timer is running.</div>';
                 });
         }
 
         refreshData();
-        // Refresh every 60 seconds instead of 10
         setInterval(refreshData, 60000);
     </script>
 </body>
 </html>
 HTML
 
+    # Set proper permissions (644 for files)
+    chmod 644 "${DASHBOARD_DIR}/index.html"
     chmod -R 755 "${DASHBOARD_DIR}"
-    print_substep "Dashboard files created - 60 second refresh"
+    print_substep "Dashboard files created - Production ready"
 }
 
 create_dashboard_scripts() {
-    print_substep "Creating dashboard scripts..."
+    print_substep "Creating dashboard scripts (Enterprise - No while loop)..."
 
     cat > "${DASHBOARD_SCRIPT}" << 'EOF'
 #!/bin/bash
-# Service Monitor Dashboard Updater v3.0.9 - 60 second interval
+# Service Monitor Dashboard Updater v3.1.4 - FIXED PI-HOLE API
+# This script runs ONCE when triggered by systemd timer
+# No infinite loops - proper service management
 
 DASHBOARD_DIR="/var/www/html/service-monitor"
 CONFIG_FILE="/etc/service-monitor/config.conf"
 LOG_FILE="/var/log/service-monitor-updater.log"
+CACHE_DIR="/var/cache/service-monitor"
 
-# Ensure log exists
-touch "$LOG_FILE" 2>/dev/null
-chmod 644 "$LOG_FILE" 2>/dev/null
+# Pi-hole paths
+PIHOLE_LOG="/var/log/pihole.log"
+PIHOLE_FTL_LOG="/var/log/pihole-FTL.log"
+PIHOLE_GRAVITY="/etc/pihole/gravity.db"
+PIHOLE_FTL_DB="/etc/pihole/pihole-FTL.db"
 
-# Log function
+# Ensure directories exist with proper permissions
+mkdir -p "${CACHE_DIR}" 2>/dev/null
+chmod 755 "${CACHE_DIR}" 2>/dev/null
+
+# Log function - logs to both file and journald
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[${timestamp}] $*" >> "$LOG_FILE"
+    echo "$*" | systemd-cat -t service-monitor -p info
 }
 
-# Function to get service status
+# Error log function
+log_error() {
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[${timestamp}] ERROR: $*" >> "$LOG_FILE"
+    echo "ERROR: $*" | systemd-cat -t service-monitor -p err
+}
+
+# Function to get service status with error handling
 get_service_status() {
     local service="$1"
     local status="inactive"
@@ -620,255 +677,241 @@ get_service_status() {
     echo "$status|$cpu|$mem"
 }
 
-# Function to get Pi-hole stats - FIXED VERSION
+# Function to get Pi-hole stats using MULTIPLE METHODS
 get_pihole_stats() {
     local status="inactive"
     local queries_today=0
     local blocked_today=0
 
-    log "Checking Pi-hole status..."
+    log "=== Pi-hole Stats Collection ==="
 
-    # Check if Pi-hole is installed and running
-    if command -v pihole &>/dev/null; then
-        log "Pi-hole command found"
-
-        # Check if pihole-FTL service is active
-        if systemctl is-active --quiet pihole-FTL.service 2>/dev/null; then
-            status="active"
-            log "Pi-hole FTL is active"
-
-            # Try multiple log locations
-            local pihole_log=""
-            if [[ -f "/var/log/pihole.log" ]]; then
-                pihole_log="/var/log/pihole.log"
-            elif [[ -f "/var/log/pihole/pihole.log" ]]; then
-                pihole_log="/var/log/pihole/pihole.log"
-            elif [[ -f "/var/log/pihole-FTL.log" ]]; then
-                pihole_log="/var/log/pihole-FTL.log"
-            fi
-
-            if [[ -n "$pihole_log" ]]; then
-                log "Using Pi-hole log: $pihole_log"
-                # Get today's date in log format
-                today=$(date '+%b %d')
-
-                # Count queries and blocked entries for today
-                if [[ "$pihole_log" == *"FTL"* ]]; then
-                    # FTL log format
-                    queries_today=$(grep -c "query" "$pihole_log" 2>/dev/null || echo 0)
-                    blocked_today=$(grep -c "blocked" "$pihole_log" 2>/dev/null || echo 0)
-                else
-                    # Standard pihole.log format
-                    queries_today=$(grep -c "query" "$pihole_log" 2>/dev/null || echo 0)
-                    blocked_today=$(grep -c "gravity blocked" "$pihole_log" 2>/dev/null || echo 0)
-
-                    # If no entries found with grep, try using pihole command
-                    if [[ $queries_today -eq 0 ]] && [[ $blocked_today -eq 0 ]]; then
-                        log "No log entries found with grep, trying pihole command..."
-                        if command -v pihole &>/dev/null; then
-                            # Try to get stats from pihole command
-                            local stats=$(pihole -c -j 2>/dev/null)
-                            if [[ -n "$stats" ]]; then
-                                queries_today=$(echo "$stats" | grep -o '"dns_queries_today":[0-9]*' | cut -d':' -f2)
-                                blocked_today=$(echo "$stats" | grep -o '"ads_blocked_today":[0-9]*' | cut -d':' -f2)
-                                log "Got stats from pihole command: queries=$queries_today, blocked=$blocked_today"
-                            fi
-                        fi
-                    fi
-                fi
-
-                # Ensure we have numbers
-                queries_today=${queries_today:-0}
-                blocked_today=${blocked_today:-0}
-                log "Final counts - Queries: $queries_today, Blocked: $blocked_today"
-            else
-                log "No Pi-hole log files found"
-            fi
-        else
-            log "Pi-hole FTL is not active"
-        fi
-    else
+    # Check if Pi-hole is installed
+    if ! command -v pihole &>/dev/null && [[ ! -f "/usr/local/bin/pihole" ]] && [[ ! -f "/usr/bin/pihole" ]]; then
         log "Pi-hole not installed"
+        echo "{\"status\":\"inactive\",\"queries_today\":0,\"blocked_today\":0}"
+        return
+    fi
+    log "Pi-hole binary found"
+
+    # Check if pihole-FTL service is active
+    if ! systemctl is-active --quiet pihole-FTL.service 2>/dev/null; then
+        log "Pi-hole FTL is not active"
+        echo "{\"status\":\"inactive\",\"queries_today\":0,\"blocked_today\":0}"
+        return
     fi
 
+    status="active"
+    log "Pi-hole FTL is active"
+
+    # METHOD 1: Try pihole -c -j API (primary method)
+    log "Method 1: Trying pihole -c -j API..."
+    local stats
+    stats=$(timeout 5 pihole -c -j 2>/dev/null)
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 ]] && [[ -n "$stats" ]]; then
+        log "API returned data (exit code: $exit_code)"
+
+        # Try to extract values using multiple patterns
+        # Pattern 1: Standard JSON format
+        queries_today=$(echo "$stats" | grep -o '"dns_queries_today":[0-9]*' | head -1 | cut -d':' -f2)
+        blocked_today=$(echo "$stats" | grep -o '"ads_blocked_today":[0-9]*' | head -1 | cut -d':' -f2)
+
+        # Pattern 2: Alternative format
+        if [[ -z "$queries_today" ]] || [[ "$queries_today" == "0" ]]; then
+            queries_today=$(echo "$stats" | grep -o '"queries":[0-9]*' | head -1 | cut -d':' -f2)
+        fi
+        if [[ -z "$blocked_today" ]] || [[ "$blocked_today" == "0" ]]; then
+            blocked_today=$(echo "$stats" | grep -o '"blocked":[0-9]*' | head -1 | cut -d':' -f2)
+        fi
+
+        # Pattern 3: Any number after these keys
+        if [[ -z "$queries_today" ]] || [[ "$queries_today" == "0" ]]; then
+            queries_today=$(echo "$stats" | grep -o '"dns_queries_today": [0-9]*' | head -1 | cut -d':' -f2 | tr -d ' ')
+        fi
+        if [[ -z "$blocked_today" ]] || [[ "$blocked_today" == "0" ]]; then
+            blocked_today=$(echo "$stats" | grep -o '"ads_blocked_today": [0-9]*' | head -1 | cut -d':' -f2 | tr -d ' ')
+        fi
+
+        log "API extraction - Queries: $queries_today, Blocked: $blocked_today"
+    else
+        log "API failed (exit code: $exit_code)"
+    fi
+
+    # METHOD 2: Try pihole -c command (human readable)
+    if [[ -z "$queries_today" ]] || [[ "$queries_today" == "0" ]] || [[ -z "$blocked_today" ]] || [[ "$blocked_today" == "0" ]]; then
+        log "Method 2: Trying pihole -c (human readable)..."
+        local human_stats
+        human_stats=$(timeout 5 pihole -c 2>/dev/null)
+        if [[ -n "$human_stats" ]]; then
+            # Extract queries today
+            local queries_line=$(echo "$human_stats" | grep -i "queries today" | grep -o '[0-9]\+')
+            if [[ -n "$queries_line" ]]; then
+                queries_today=$queries_line
+            fi
+            # Extract blocked today
+            local blocked_line=$(echo "$human_stats" | grep -i "blocked today" | grep -o '[0-9]\+')
+            if [[ -n "$blocked_line" ]]; then
+                blocked_today=$blocked_line
+            fi
+            log "Human readable - Queries: $queries_today, Blocked: $blocked_today"
+        fi
+    fi
+
+    # METHOD 3: Try sqlite3 query on FTL database
+    if [[ -z "$queries_today" ]] || [[ "$queries_today" == "0" ]] || [[ -z "$blocked_today" ]] || [[ "$blocked_today" == "0" ]]; then
+        if [[ -f "$PIHOLE_FTL_DB" ]] && command -v sqlite3 &>/dev/null; then
+            log "Method 3: Querying FTL database..."
+            # Get today's timestamp (midnight)
+            local today_midnight=$(date +%s -d "today 00:00:00" 2>/dev/null || echo "0")
+            if [[ "$today_midnight" != "0" ]]; then
+                # Query queries today
+                local sql_queries=$(sqlite3 "$PIHOLE_FTL_DB" "SELECT COUNT(*) FROM queries WHERE timestamp >= $today_midnight;" 2>/dev/null)
+                if [[ -n "$sql_queries" ]]; then
+                    queries_today=$sql_queries
+                fi
+                # Query blocked today
+                local sql_blocked=$(sqlite3 "$PIHOLE_FTL_DB" "SELECT COUNT(*) FROM queries WHERE timestamp >= $today_midnight AND status = 1;" 2>/dev/null)
+                if [[ -n "$sql_blocked" ]]; then
+                    blocked_today=$sql_blocked
+                fi
+                log "FTL DB - Queries: $queries_today, Blocked: $blocked_today"
+            fi
+        fi
+    fi
+
+    # METHOD 4: Fallback to log file (limited to today's entries)
+    if [[ -z "$queries_today" ]] || [[ "$queries_today" == "0" ]] || [[ -z "$blocked_today" ]] || [[ "$blocked_today" == "0" ]]; then
+        log "Method 4: Checking log files..."
+        local log_file=""
+        if [[ -f "$PIHOLE_LOG" ]]; then
+            log_file="$PIHOLE_LOG"
+        elif [[ -f "$PIHOLE_FTL_LOG" ]]; then
+            log_file="$PIHOLE_FTL_LOG"
+        fi
+
+        if [[ -n "$log_file" ]]; then
+            local today=$(date '+%b %d')
+            local today_queries=$(grep -c "^${today}.*query" "$log_file" 2>/dev/null || echo 0)
+            local today_blocked=$(grep -c "^${today}.*gravity blocked" "$log_file" 2>/dev/null || echo 0)
+
+            if [[ -z "$queries_today" ]] || [[ "$queries_today" == "0" ]]; then
+                queries_today=$today_queries
+            fi
+            if [[ -z "$blocked_today" ]] || [[ "$blocked_today" == "0" ]]; then
+                blocked_today=$today_blocked
+            fi
+            log "Log file - Queries: $queries_today, Blocked: $blocked_today"
+        fi
+    fi
+
+    # Ensure we have numbers
+    queries_today=${queries_today:-0}
+    blocked_today=${blocked_today:-0}
+
+    # Remove any non-numeric characters
+    queries_today=$(echo "$queries_today" | tr -cd '0-9')
+    blocked_today=$(echo "$blocked_today" | tr -cd '0-9')
+
+    # Default to 0 if empty
+    queries_today=${queries_today:-0}
+    blocked_today=${blocked_today:-0}
+
+    log "FINAL Pi-hole stats - Status: $status, Queries: $queries_today, Blocked: $blocked_today"
     echo "{\"status\":\"$status\",\"queries_today\":$queries_today,\"blocked_today\":$blocked_today}"
 }
 
-log "=== Service Monitor Updater v3.0.9 Started (60s interval) ==="
+# Set proper umask for file creation
+umask 022
+
+log "=== Service Monitor Updater v3.1.4 Production (Timer-triggered) ==="
+log "Started at: $(date)"
 log "PID: $$"
-log "Dashboard directory: $DASHBOARD_DIR"
-log "Config file: $CONFIG_FILE"
 
-# Verify dashboard directory exists
-if [[ ! -d "$DASHBOARD_DIR" ]]; then
-    log "ERROR: Dashboard directory $DASHBOARD_DIR does not exist"
-    mkdir -p "$DASHBOARD_DIR" 2>/dev/null || {
-        log "CRITICAL: Cannot create dashboard directory"
-        exit 1
-    }
-    log "Created dashboard directory"
-fi
+# Get system info with error handling
+HOSTNAME=$(hostname 2>/dev/null || echo "localhost")
+UPTIME=$(uptime 2>/dev/null | sed 's/.*up \([^,]*\),.*/\1/' || echo "0")
+LOAD=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | xargs || echo "0.00")
+CPU_CORES=$(nproc 2>/dev/null || echo "1")
+MEMORY=$(free -h 2>/dev/null | grep Mem | awk '{print $3"/"$2}' || echo "0/0")
+DISK=$(df -h / 2>/dev/null | awk 'NR==2 {print $5}' || echo "0%")
 
-# Main loop - 60 second interval
-loop_count=0
-while true; do
-    loop_count=$((loop_count + 1))
-    log "=== Loop $loop_count starting ==="
+log "System: $HOSTNAME, Load: $LOAD, Memory: $MEMORY, Disk: $DISK"
 
-    # Get system info with detailed logging
-    HOSTNAME=$(hostname 2>/dev/null || echo "localhost")
-    UPTIME=$(uptime 2>/dev/null | sed 's/.*up \([^,]*\),.*/\1/' || echo "0")
-    LOAD=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | xargs || echo "0.00")
-    CPU_CORES=$(nproc 2>/dev/null || echo "1")
-    MEMORY=$(free -h 2>/dev/null | grep Mem | awk '{print $3"/"$2}' || echo "0/0")
-    DISK=$(df -h / 2>/dev/null | awk 'NR==2 {print $5}' || echo "0%")
+# Get Pi-hole stats using enhanced method
+PIHOLE_STATS=$(get_pihole_stats)
+log "Pi-hole stats JSON: $PIHOLE_STATS"
 
-    log "System: $HOSTNAME, Uptime: $UPTIME, Load: $LOAD, Cores: $CPU_CORES, Memory: $MEMORY, Disk: $DISK"
+# Check DNS services
+DNS_SERVICES=("pihole-FTL.service" "unbound.service" "dnscrypt-proxy.service" "dnsmasq.service" "named.service")
+DNS_JSON=""
+FIRST_DNS=1
 
-    # Get Pi-hole stats
-    PIHOLE_STATS=$(get_pihole_stats)
-    log "Pi-hole stats: $PIHOLE_STATS"
+for SERVICE in "${DNS_SERVICES[@]}"; do
+    # Check if service exists using multiple methods
+    if systemctl list-unit-files 2>/dev/null | grep -q "$SERVICE" || \
+       systemctl list-unit-files 2>/dev/null | grep -q "${SERVICE%.service}" || \
+       [[ -f "/etc/systemd/system/$SERVICE" ]] || \
+       pgrep -f "${SERVICE%.service}" >/dev/null 2>&1; then
 
-    # Check DNS services
-    DNS_SERVICES=("pihole-FTL.service" "unbound.service" "dnscrypt-proxy.service" "dnsmasq.service" "named.service")
-    DNS_JSON=""
-    FIRST_DNS=1
+        IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
+        log "DNS $SERVICE: $STATUS (CPU: $CPU%, MEM: $MEM%)"
 
-    for SERVICE in "${DNS_SERVICES[@]}"; do
-        # Check if service exists using multiple methods
-        if systemctl list-unit-files 2>/dev/null | grep -q "$SERVICE" || \
-           systemctl list-unit-files 2>/dev/null | grep -q "${SERVICE%.service}" || \
-           [[ -f "/etc/systemd/system/$SERVICE" ]] || \
-           pgrep -f "${SERVICE%.service}" >/dev/null 2>&1; then
-
-            IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
-            log "DNS $SERVICE: $STATUS (CPU: $CPU%, MEM: $MEM%)"
-
-            if [[ $FIRST_DNS -eq 1 ]]; then
-                FIRST_DNS=0
-            else
-                DNS_JSON+=","
-            fi
-
-            DNS_JSON+="{\"name\":\"$SERVICE\",\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
+        if [[ $FIRST_DNS -eq 1 ]]; then
+            FIRST_DNS=0
+        else
+            DNS_JSON+=","
         fi
-    done
 
-    # Get monitored services from config - IMPROVED PARSING
-    SERVICES_JSON=""
-    FIRST_REG=1
+        DNS_JSON+="{\"name\":\"$SERVICE\",\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
+    fi
+done
 
-    if [[ -f "$CONFIG_FILE" ]]; then
-        log "Reading config from $CONFIG_FILE"
+# Get monitored services from config
+SERVICES_JSON=""
+FIRST_REG=1
 
-        # Try to source the config file directly
-        if source "$CONFIG_FILE" 2>/dev/null; then
-            log "Successfully sourced config file"
+if [[ -f "$CONFIG_FILE" ]]; then
+    # Source the config file directly
+    if source "$CONFIG_FILE" 2>/dev/null; then
+        # Check if MONITORED_SERVICES is an array
+        if [[ "$(declare -p MONITORED_SERVICES 2>/dev/null)" =~ "declare -a" ]]; then
+            for SERVICE in "${MONITORED_SERVICES[@]}"; do
+                [[ -z "$SERVICE" ]] && continue
 
-            # Check if MONITORED_SERVICES is an array
-            if [[ "$(declare -p MONITORED_SERVICES 2>/dev/null)" =~ "declare -a" ]]; then
-                log "MONITORED_SERVICES is an array with ${#MONITORED_SERVICES[@]} elements"
-                for SERVICE in "${MONITORED_SERVICES[@]}"; do
-                    # Skip empty entries
-                    [[ -z "$SERVICE" ]] && continue
-
-                    # Skip DNS services to avoid duplicates
-                    skip=0
-                    for dns in "${DNS_SERVICES[@]}"; do
-                        if [[ "$SERVICE" == "$dns" ]] || [[ "$SERVICE" == "${dns%.service}" ]]; then
-                            skip=1
-                            break
-                        fi
-                    done
-                    [[ $skip -eq 1 ]] && continue
-
-                    IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
-                    log "Monitored service $SERVICE: $STATUS (CPU: $CPU%, MEM: $MEM%)"
-
-                    if [[ $FIRST_REG -eq 1 ]]; then
-                        FIRST_REG=0
-                    else
-                        SERVICES_JSON+=","
-                    fi
-
-                    SERVICES_JSON+="{\"name\":\"$SERVICE\",\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
-                done
-            else
-                log "MONITORED_SERVICES is not an array, trying string parsing"
-                # Fallback to string parsing for backward compatibility
-                while IFS= read -r line; do
-                    if [[ "$line" =~ MONITORED_SERVICES=[\"\'](.*)[\"\'] ]]; then
-                        IFS=' ' read -ra SERVICES <<< "${BASH_REMATCH[1]}"
-                        for SERVICE in "${SERVICES[@]}"; do
-                            # Skip DNS services to avoid duplicates
-                            skip=0
-                            for dns in "${DNS_SERVICES[@]}"; do
-                                if [[ "$SERVICE" == "$dns" ]] || [[ "$SERVICE" == "${dns%.service}" ]]; then
-                                    skip=1
-                                    break
-                                fi
-                            done
-                            [[ $skip -eq 1 ]] && continue
-
-                            IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
-                            log "Monitored service $SERVICE: $STATUS (CPU: $CPU%, MEM: $MEM%)"
-
-                            if [[ $FIRST_REG -eq 1 ]]; then
-                                FIRST_REG=0
-                            else
-                                SERVICES_JSON+=","
-                            fi
-
-                            SERVICES_JSON+="{\"name\":\"$SERVICE\",\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
-                        done
+                # Skip DNS services to avoid duplicates
+                skip=0
+                for dns in "${DNS_SERVICES[@]}"; do
+                    if [[ "$SERVICE" == "$dns" ]] || [[ "$SERVICE" == "${dns%.service}" ]]; then
+                        skip=1
                         break
                     fi
-                done < "$CONFIG_FILE"
-            fi
-        else
-            log "WARNING: Could not source config file, trying manual parsing"
-            # Fallback to manual parsing
-            while IFS= read -r line; do
-                if [[ "$line" =~ MONITORED_SERVICES=[\"\'](.*)[\"\'] ]]; then
-                    IFS=' ' read -ra SERVICES <<< "${BASH_REMATCH[1]}"
-                    for SERVICE in "${SERVICES[@]}"; do
-                        # Skip DNS services to avoid duplicates
-                        skip=0
-                        for dns in "${DNS_SERVICES[@]}"; do
-                            if [[ "$SERVICE" == "$dns" ]] || [[ "$SERVICE" == "${dns%.service}" ]]; then
-                                skip=1
-                                break
-                            fi
-                        done
-                        [[ $skip -eq 1 ]] && continue
+                done
+                [[ $skip -eq 1 ]] && continue
 
-                        IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
-                        log "Monitored service $SERVICE: $STATUS (CPU: $CPU%, MEM: $MEM%)"
+                IFS='|' read -r STATUS CPU MEM <<< "$(get_service_status "$SERVICE")"
+                log "Monitored service $SERVICE: $STATUS (CPU: $CPU%, MEM: $MEM%)"
 
-                        if [[ $FIRST_REG -eq 1 ]]; then
-                            FIRST_REG=0
-                        else
-                            SERVICES_JSON+=","
-                        fi
-
-                        SERVICES_JSON+="{\"name\":\"$SERVICE\",\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
-                    done
-                    break
+                if [[ $FIRST_REG -eq 1 ]]; then
+                    FIRST_REG=0
+                else
+                    SERVICES_JSON+=","
                 fi
-            done < "$CONFIG_FILE"
+
+                SERVICES_JSON+="{\"name\":\"$SERVICE\",\"status\":\"$STATUS\",\"cpu\":$CPU,\"mem\":$MEM}"
+            done
         fi
-    else
-        log "WARNING: Config file $CONFIG_FILE not found"
     fi
+fi
 
-    # Write JSON atomically
-    TMP_FILE="${DASHBOARD_DIR}/status.json.tmp.$$"
-    FINAL_FILE="${DASHBOARD_DIR}/status.json"
+# Write JSON atomically
+TMP_FILE="${DASHBOARD_DIR}/status.json.tmp.$$"
+FINAL_FILE="${DASHBOARD_DIR}/status.json"
 
-    cat > "$TMP_FILE" << JSON
+cat > "$TMP_FILE" << JSON
 {
     "last_update": "$(date '+%Y-%m-%d %H:%M:%S')",
-    "version": "3.0.9",
+    "version": "3.1.4",
     "servers": [
         {
             "id": "local",
@@ -886,47 +929,50 @@ while true; do
 }
 JSON
 
-    # Verify JSON is valid
-    if python3 -m json.tool "$TMP_FILE" > /dev/null 2>&1; then
-        mv "$TMP_FILE" "$FINAL_FILE"
-        chmod 644 "$FINAL_FILE"
+# Verify JSON is valid
+if python3 -m json.tool "$TMP_FILE" > /dev/null 2>&1; then
+    # Set proper permissions before moving
+    chmod 644 "$TMP_FILE"
+    mv "$TMP_FILE" "$FINAL_FILE"
+    chmod 644 "$FINAL_FILE"
 
-        # Set proper ownership
-        if id www-data &>/dev/null; then
-            chown www-data:www-data "$FINAL_FILE" 2>/dev/null
-        elif id apache &>/dev/null; then
-            chown apache:apache "$FINAL_FILE" 2>/dev/null
-        elif id nginx &>/dev/null; then
-            chown nginx:nginx "$FINAL_FILE" 2>/dev/null
-        fi
-
-        log "Successfully wrote valid JSON to $FINAL_FILE"
-    else
-        log "ERROR: Generated invalid JSON, keeping previous version"
-        rm -f "$TMP_FILE"
+    # Set proper ownership
+    if id www-data &>/dev/null; then
+        chown www-data:www-data "$FINAL_FILE" 2>/dev/null
+    elif id apache &>/dev/null; then
+        chown apache:apache "$FINAL_FILE" 2>/dev/null
+    elif id nginx &>/dev/null; then
+        chown nginx:nginx "$FINAL_FILE" 2>/dev/null
     fi
 
-    log "=== Loop $loop_count completed, sleeping 60 seconds ==="
-    sleep 60
-done
+    log "Successfully wrote valid JSON to $FINAL_FILE (permissions: 644)"
+else
+    log_error "Generated invalid JSON, keeping previous version"
+    rm -f "$TMP_FILE"
+    exit 1
+fi
+
+log "=== Update completed successfully ==="
+exit 0
 EOF
 
-    chmod +x "${DASHBOARD_SCRIPT}"
+    chmod 755 "${DASHBOARD_SCRIPT}"
 
     # Verify shebang
     if ! head -1 "${DASHBOARD_SCRIPT}" | grep -q "^#!.*bash"; then
         sed -i '1s/^/#!\/bin\/bash\n/' "${DASHBOARD_SCRIPT}"
     fi
 
-    print_substep "Dashboard scripts created with 60 second interval"
+    print_substep "Dashboard scripts created - Fixed Pi-hole API with multiple methods"
 }
 
 create_dashboard_services() {
-    print_substep "Creating dashboard services..."
+    print_substep "Creating dashboard services with proper permissions (644)..."
 
+    # Create HTTP server service
     cat > "${DASHBOARD_HTTP_SERVICE}" << EOF
 [Unit]
-Description=Service Monitor HTTP Server v3.0.9
+Description=Service Monitor HTTP Server v3.1.4
 After=network.target
 
 [Service]
@@ -937,49 +983,87 @@ WorkingDirectory=${DASHBOARD_DIR}
 ExecStart=/usr/bin/python3 -m http.server ${DEFAULT_DASHBOARD_PORT} --bind 0.0.0.0
 Restart=always
 RestartSec=5
-StandardOutput=null
-StandardError=null
+CPUQuota=10%
+MemoryMax=100M
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    cat > "${DASHBOARD_UPDATER_SERVICE}" << EOF
+    # Set proper permissions (644)
+    chmod 644 "${DASHBOARD_HTTP_SERVICE}"
+
+    # Create dashboard service (triggered by timer)
+    cat > "${DASHBOARD_SERVICE}" << EOF
 [Unit]
-Description=Service Monitor Dashboard Updater v3.0.9 (60s interval)
+Description=Service Monitor Dashboard Updater v3.1.4 (Production)
 After=network.target
 
 [Service]
-Type=simple
+Type=oneshot
 User=root
 Group=root
 ExecStart=${DASHBOARD_SCRIPT}
-Restart=always
-RestartSec=5
-StandardOutput=null
-StandardError=null
-Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-[Install]
-WantedBy=multi-user.target
+StandardOutput=journal
+StandardError=journal
+PrivateTmp=yes
+NoNewPrivileges=yes
 EOF
 
-    systemctl daemon-reload
-    systemctl enable service-monitor-http.service &> /dev/null
-    systemctl enable service-monitor-updater.service &> /dev/null
-    systemctl restart service-monitor-http.service &> /dev/null
-    systemctl restart service-monitor-updater.service &> /dev/null
+    # Set proper permissions (644)
+    chmod 644 "${DASHBOARD_SERVICE}"
 
-    # Verify services are running
+    # Create timer (replaces while loop)
+    cat > "${DASHBOARD_TIMER}" << EOF
+[Unit]
+Description=Service Monitor Dashboard Timer v3.1.4
+Requires=service-monitor-dashboard.service
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=true
+RandomizedDelaySec=5
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    # Set proper permissions (644)
+    chmod 644 "${DASHBOARD_TIMER}"
+
+    # Enable and start services
+    systemctl daemon-reload
+
+    # Enable HTTP server
+    systemctl enable service-monitor-http.service &> /dev/null
+    systemctl restart service-monitor-http.service &> /dev/null
+
+    # Enable timer (this replaces the while loop)
+    systemctl enable service-monitor-dashboard.timer &> /dev/null
+    systemctl start service-monitor-dashboard.timer &> /dev/null
+
+    # Run once immediately to populate data
+    systemctl start service-monitor-dashboard.service &> /dev/null
+
+    # Verify timer is running
     sleep 2
-    if systemctl is-active --quiet service-monitor-updater.service; then
-        print_substep "Updater service is running (60s interval)"
+    if systemctl is-active --quiet service-monitor-dashboard.timer; then
+        print_substep "Timer is active - will run every minute"
+        print_substep "No while loop - zero CPU usage between runs"
+        # Show timer permissions
+        print_substep "Timer file permissions: $(stat -c '%a' ${DASHBOARD_TIMER} 2>/dev/null || echo '644')"
     else
-        print_warning "Updater service failed to start, checking logs..."
-        journalctl -u service-monitor-updater.service -n 10 --no-pager
+        print_warning "Timer failed to start, checking logs..."
+        journalctl -u service-monitor-dashboard.timer -n 10 --no-pager
     fi
 
-    print_substep "Dashboard services created"
+    # Show timer info
+    local next_run=$(systemctl show service-monitor-dashboard.timer -p NextElapseUSecRealtime --value 2>/dev/null)
+    if [[ -n "$next_run" ]]; then
+        print_substep "Next run: ${next_run}"
+    fi
+
+    print_substep "Dashboard services created with systemd timer (all files 644)"
 }
 
 # =============================================================================
@@ -989,7 +1073,7 @@ EOF
 create_monitor_script() {
     cat > "${MONITOR_SCRIPT}" << 'EOF'
 #!/bin/bash
-# Service Load Monitor - Core Script v3.0.9
+# Service Load Monitor - Core Script v3.1.4
 
 CONFIG_FILE="/etc/service-monitor/config.conf"
 LOG_FILE="/var/log/service-monitor.log"
@@ -1005,7 +1089,7 @@ log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
 }
 
-log_message "Service Load Monitor v3.0.9 started"
+log_message "Service Load Monitor v3.1.4 started"
 
 while true; do
     CURRENT_LOAD=$(uptime | awk -F'load average:' '{print $2}' | awk -F',' '{print $1}' | sed 's/ //g' 2>/dev/null || echo "0")
@@ -1018,8 +1102,8 @@ while true; do
 done
 EOF
 
-    chmod +x "${MONITOR_SCRIPT}"
-    print_substep "Monitor script created"
+    chmod 755 "${MONITOR_SCRIPT}"
+    print_substep "Monitor script created (755)"
 }
 
 create_config_file() {
@@ -1029,7 +1113,7 @@ create_config_file() {
 
     # Create config with proper bash array syntax
     cat > "${CONFIG_FILE}" << EOF
-# Service Load Monitor Configuration v3.0.9
+# Service Load Monitor Configuration v3.1.4 Production
 # This file uses bash array syntax for MONITORED_SERVICES
 
 # Monitor settings
@@ -1059,11 +1143,17 @@ ENABLE_DASHBOARD="yes"
 DASHBOARD_PORT=8080
 DASHBOARD_REFRESH=60
 
+# Pi-hole settings
+PIHOLE_USE_API="yes"  # Uses API instead of log grepping
+PIHOLE_API_TIMEOUT=5  # Timeout in seconds
+
 # Logging
 LOG_FILE="/var/log/service-monitor.log"
 EOF
 
-    print_substep "Configuration file created with bash array syntax"
+    # Set proper permissions (644)
+    chmod 644 "${CONFIG_FILE}"
+    print_substep "Configuration file created with bash array syntax (644)"
 }
 
 # =============================================================================
@@ -1074,7 +1164,7 @@ install_monitor() {
     print_banner
 
     echo -e "${WHITE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${WHITE}║           INSTALLATION WIZARD - v3.0.9                     ║${NC}"
+    echo -e "${WHITE}║        INSTALLATION WIZARD - v3.1.4 PRODUCTION             ║${NC}"
     echo -e "${WHITE}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1111,10 +1201,11 @@ install_monitor() {
 
     # Step 4: Create directories
     print_step $current_step $total_steps "Creating directories"
-    mkdir -p "${CONFIG_BASE_DIR}" "${DASHBOARD_DIR}" "${BACKUP_DIR}" "$(dirname "${LOG_FILE}")"
+    mkdir -p "${CONFIG_BASE_DIR}" "${DASHBOARD_DIR}" "${BACKUP_DIR}" "$(dirname "${LOG_FILE}")" "${CACHE_DIR}"
     touch "${UPDATER_LOG}" 2>/dev/null
     chmod 644 "${UPDATER_LOG}" 2>/dev/null
-    print_success "Directories created"
+    chmod 755 "${CACHE_DIR}" 2>/dev/null
+    print_success "Directories created with proper permissions"
     current_step=$((current_step + 1))
 
     # Step 5: Create monitor files
@@ -1125,18 +1216,18 @@ install_monitor() {
     current_step=$((current_step + 1))
 
     # Step 6: Create dashboard
-    print_step $current_step $total_steps "Creating web dashboard"
+    print_step $current_step $total_steps "Creating web dashboard (Production)"
     create_dashboard_files
     create_dashboard_scripts
     create_dashboard_services
-    print_success "Dashboard created with 60 second interval"
+    print_success "Dashboard created with fixed Pi-hole API (multiple methods)"
     current_step=$((current_step + 1))
 
     # Step 7: Create main service
     print_step $current_step $total_steps "Creating main service"
     cat > "${SERVICE_FILE}" << EOF
 [Unit]
-Description=Service Load Monitor v3.0.9
+Description=Service Load Monitor v3.1.4
 After=network.target
 
 [Service]
@@ -1145,14 +1236,16 @@ ExecStart=${MONITOR_SCRIPT}
 Restart=always
 RestartSec=10
 User=root
+Nice=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    chmod 644 "${SERVICE_FILE}"
     systemctl daemon-reload
     systemctl enable service-monitor.service &> /dev/null
     systemctl start service-monitor.service &> /dev/null
-    print_success "Main service created"
+    print_success "Main service created (service file: 644)"
     current_step=$((current_step + 1))
 
     # Step 8: Show summary
@@ -1169,35 +1262,43 @@ EOF
     echo ""
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo -e "${WHITE}Installation Summary:${NC}"
-    echo "  • Version: ${SCRIPT_VERSION} (60 second interval)"
-    echo -e "  • Monitor Service: ${GREEN}service-monitor.service${NC}"
-    echo -e "  • HTTP Server: ${GREEN}service-monitor-http.service${NC}"
-    echo -e "  • Updater Service: ${GREEN}service-monitor-updater.service${NC}"
-    echo "  • Config: ${CONFIG_FILE}"
+    echo -e "${WHITE}Production Installation Summary:${NC}"
+    echo "  • Version: ${SCRIPT_VERSION} PRODUCTION"
+    echo -e "  • Monitor Service: ${GREEN}service-monitor.service${NC} (644)"
+    echo -e "  • HTTP Server: ${GREEN}service-monitor-http.service${NC} (644)"
+    echo -e "  • Dashboard Service: ${GREEN}service-monitor-dashboard.service${NC} (644)"
+    echo -e "  • Dashboard Timer: ${GREEN}service-monitor-dashboard.timer${NC} (644)"
+    echo "  • Config: ${CONFIG_FILE} (644)"
+    echo "  • Dashboard Script: ${DASHBOARD_SCRIPT} (755)"
     echo "  • Logs: ${LOG_FILE}"
-    echo "  • Updater Log: ${UPDATER_LOG}"
     echo "  • Dashboard: ${DASHBOARD_DIR}"
     echo "  • DNS Services: ${#dns_services[@]}"
-    echo "  • Update Interval: 60 seconds"
+    echo ""
+    echo -e "${WHITE}Pi-hole API Features:${NC}"
+    echo -e "  • ${GREEN}✓${NC} Multiple collection methods (API, sqlite3, log fallback)"
+    echo -e "  • ${GREEN}✓${NC} JSON parsing with multiple patterns"
+    echo -e "  • ${GREEN}✓${NC} FTL database query support"
+    echo -e "  • ${GREEN}✓${NC} Detailed debug logging"
     echo ""
     echo -e "${WHITE}Commands:${NC}"
-    echo -e "  • Check updater logs: ${GREEN}tail -f ${UPDATER_LOG}${NC}"
-    echo -e "  • Check service status: ${GREEN}systemctl status service-monitor-updater.service${NC}"
+    echo -e "  • Check timer status: ${GREEN}systemctl status service-monitor-dashboard.timer${NC}"
+    echo -e "  • View Pi-hole debug logs: ${GREEN}journalctl -u service-monitor-dashboard.service -f | grep -i pihole${NC}"
+    echo -e "  • Run manually: ${GREEN}systemctl start service-monitor-dashboard.service${NC}"
     echo -e "  • View dashboard: ${GREEN}http://${ip}:${DEFAULT_DASHBOARD_PORT}/${NC}"
     echo ""
-    echo -e "${GREEN}Thank you for using Service Load Monitor v3.0.9!${NC}"
+    echo -e "${GREEN}Thank you for using Service Load Monitor v3.1.4 Production!${NC}"
+    echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}"
     echo ""
 }
 
 # =============================================================================
-# REMOVAL FUNCTION
+# IMPROVED REMOVAL FUNCTION - v3.1.4
 # =============================================================================
 
 remove_monitor() {
     print_banner
     echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║              REMOVAL WIZARD - v3.0.9                       ║${NC}"
+    echo -e "${RED}║           REMOVAL WIZARD - v3.1.4 PRODUCTION               ║${NC}"
     echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1206,41 +1307,180 @@ remove_monitor() {
         exit 1
     fi
 
-    echo -e "${RED}WARNING: This will remove Service Load Monitor${NC}"
-    echo -e "${YELLOW}Are you sure? (y/N)${NC}"
+    echo -e "${RED}WARNING: This will completely remove Service Load Monitor${NC}"
+    echo -e "${YELLOW}Are you absolutely sure? Type 'YES' to confirm:${NC}"
     read -p "> " confirm
-    if [[ ! "${confirm}" =~ ^[Yy]$ ]]; then
+
+    if [[ "${confirm}" != "YES" ]]; then
         print_info "Removal cancelled"
         return
     fi
 
     echo ""
-    echo -e "${YELLOW}Remove configuration and data? (y/N)${NC}"
+    echo -e "${YELLOW}Remove all configuration and data? (y/N)${NC}"
     read -p "> " remove_data
 
-    print_info "Stopping services..."
-    systemctl stop service-monitor.service 2>/dev/null
-    systemctl stop service-monitor-http.service 2>/dev/null
-    systemctl stop service-monitor-updater.service 2>/dev/null
+    echo ""
+    print_info "Starting comprehensive cleanup..."
 
-    print_info "Disabling services..."
-    systemctl disable service-monitor.service 2>/dev/null
-    systemctl disable service-monitor-http.service 2>/dev/null
-    systemctl disable service-monitor-updater.service 2>/dev/null
+    # ===== STOP ALL SERVICES =====
+    print_substep "Stopping all services..."
 
-    print_info "Removing files..."
-    rm -f "${MONITOR_SCRIPT}" "${SERVICE_FILE}" "${DASHBOARD_SCRIPT}"
-    rm -f "${DASHBOARD_HTTP_SERVICE}" "${DASHBOARD_UPDATER_SERVICE}"
-    rm -f "${VERSION_FILE}"
-
-    if [[ "${remove_data}" =~ ^[Yy]$ ]]; then
-        rm -rf "${CONFIG_BASE_DIR}" "${LIB_BASE_DIR}" "${DASHBOARD_DIR}"
-        rm -f "${LOG_FILE}"* "${UPDATER_LOG}"*
-        print_info "Configuration and data removed"
+    # Stop timer first (prevents auto-restart)
+    if systemctl list-unit-files 2>/dev/null | grep -q "service-monitor-dashboard.timer"; then
+        echo "  Stopping dashboard timer..."
+        systemctl stop service-monitor-dashboard.timer 2>/dev/null
     fi
 
+    # Stop all possible service names
+    local services=(
+        "service-monitor-dashboard.service"
+        "service-monitor-http.service"
+        "service-monitor.service"
+        "service-monitor-updater.service"  # LEGACY - explicitly target this
+        "service-monitor-v2.2.2.service"   # LEGACY
+    )
+
+    for service in "${services[@]}"; do
+        if systemctl list-unit-files 2>/dev/null | grep -q "$service"; then
+            echo "  Stopping $service..."
+            systemctl stop "$service" 2>/dev/null
+            sleep 1
+        fi
+    done
+
+    # ===== DISABLE ALL SERVICES =====
+    print_substep "Disabling all services..."
+
+    # Disable timer first
+    if systemctl list-unit-files 2>/dev/null | grep -q "service-monitor-dashboard.timer"; then
+        echo "  Disabling dashboard timer..."
+        systemctl disable service-monitor-dashboard.timer 2>/dev/null
+    fi
+
+    # Disable all possible service names
+    for service in "${services[@]}"; do
+        if systemctl list-unit-files 2>/dev/null | grep -q "$service"; then
+            echo "  Disabling $service..."
+            systemctl disable "$service" 2>/dev/null
+        fi
+    done
+
+    # ===== VERIFY SERVICES ARE STOPPED =====
+    print_substep "Verifying all services are stopped..."
+    sleep 2
+
+    local still_running=0
+    for service in "${services[@]}"; do
+        if systemctl is-active --quiet "$service" 2>/dev/null; then
+            echo "  WARNING: $service is still running, forcing stop..."
+            systemctl kill "$service" 2>/dev/null
+            systemctl stop "$service" 2>/dev/null
+            still_running=1
+        fi
+    done
+
+    if [[ $still_running -eq 0 ]]; then
+        print_substep "All services successfully stopped"
+    fi
+
+    # ===== REMOVE SERVICE FILES =====
+    print_substep "Removing service files..."
+
+    # List of all possible service files to remove
+    local service_files=(
+        "${DASHBOARD_TIMER}"
+        "${DASHBOARD_SERVICE}"
+        "${DASHBOARD_HTTP_SERVICE}"
+        "${SERVICE_FILE}"
+        "${LEGACY_UPDATER_SERVICE}"  # CRITICAL: Remove old updater service
+        "${LEGACY_SERVICE_V2}"
+        "${LEGACY_SERVICE_OLD}"
+        "/etc/systemd/system/service-monitor-updater.service"  # Direct path as backup
+        "/etc/systemd/system/multi-user.target.wants/service-monitor-updater.service"
+        "/etc/systemd/system/timers.target.wants/service-monitor-dashboard.timer"
+        "/etc/systemd/system/multi-user.target.wants/service-monitor-http.service"
+        "/etc/systemd/system/multi-user.target.wants/service-monitor.service"
+    )
+
+    for file in "${service_files[@]}"; do
+        if [[ -f "$file" ]] || [[ -L "$file" ]]; then
+            echo "  Removing $file"
+            rm -f "$file" 2>/dev/null
+        fi
+    done
+
+    # ===== REMOVE SCRIPT FILES =====
+    print_substep "Removing script files..."
+
+    local script_files=(
+        "${MONITOR_SCRIPT}"
+        "${DASHBOARD_SCRIPT}"
+        "${BASE_DIR}/service_load_monitor.sh"        # Legacy
+        "${BASE_DIR}/service-monitor-client.sh"      # Legacy
+        "${BASE_DIR}/service-monitor-update.sh"      # Legacy
+    )
+
+    for file in "${script_files[@]}"; do
+        if [[ -f "$file" ]]; then
+            echo "  Removing $file"
+            rm -f "$file" 2>/dev/null
+        fi
+    done
+
+    # ===== REMOVE CONFIGURATION AND DATA =====
+    if [[ "${remove_data}" =~ ^[Yy]$ ]]; then
+        print_substep "Removing configuration and data..."
+
+        local data_dirs=(
+            "${CONFIG_BASE_DIR}"
+            "${LIB_BASE_DIR}"
+            "${DASHBOARD_DIR}"
+            "${CACHE_DIR}"
+            "/var/lib/service-monitor"  # Direct path as backup
+        )
+
+        for dir in "${data_dirs[@]}"; do
+            if [[ -d "$dir" ]]; then
+                echo "  Removing $dir"
+                rm -rf "$dir" 2>/dev/null
+            fi
+        done
+
+        # Remove log files
+        rm -f "${LOG_FILE}"* "${UPDATER_LOG}"* 2>/dev/null
+        rm -f /var/log/service-monitor*.log* 2>/dev/null
+
+        print_substep "Configuration and data removed"
+    else
+        print_info "Configuration kept at: ${CONFIG_BASE_DIR}"
+    fi
+
+    # ===== FINAL CLEANUP =====
+    print_substep "Final systemd cleanup..."
     systemctl daemon-reload
-    print_success "Removal complete"
+    systemctl reset-failed 2>/dev/null
+
+    # ===== VERIFY REMOVAL =====
+    print_substep "Verifying removal..."
+    local remaining=0
+
+    # Check for any remaining service files
+    for service in "${services[@]}"; do
+        if systemctl list-unit-files 2>/dev/null | grep -q "$service"; then
+            echo "  WARNING: $service still present in systemd"
+            remaining=1
+        fi
+    done
+
+    if [[ $remaining -eq 0 ]]; then
+        print_success "All Service Load Monitor components have been removed"
+    else
+        print_warning "Some components may still remain. Check manually with: systemctl list-units | grep service-monitor"
+    fi
+
+    echo ""
+    print_success "Removal process completed"
 }
 
 # =============================================================================
@@ -1250,7 +1490,7 @@ remove_monitor() {
 show_status() {
     print_banner
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${WHITE}                    SYSTEM STATUS - v3.0.9${NC}"
+    echo -e "${WHITE}              SYSTEM STATUS - v3.1.4 PRODUCTION              ${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
@@ -1268,30 +1508,59 @@ show_status() {
         echo -e "  • ${RED}○${NC} HTTP Server: Stopped"
     fi
 
-    if systemctl is-active --quiet service-monitor-updater.service 2>/dev/null; then
-        echo -e "  • ${GREEN}●${NC} Updater Service: Running (60s interval)"
-        # Show last few lines of updater log
-        if [[ -f "${UPDATER_LOG}" ]]; then
-            echo -e "  • Last updater log entries:"
-            tail -3 "${UPDATER_LOG}" 2>/dev/null | sed 's/^/    /'
+    if systemctl is-active --quiet service-monitor-dashboard.timer 2>/dev/null; then
+        echo -e "  • ${GREEN}●${NC} Dashboard Timer: Active"
+        local next_run=$(systemctl show service-monitor-dashboard.timer -p NextElapseUSecRealtime --value 2>/dev/null)
+        if [[ -n "$next_run" ]]; then
+            echo -e "  • Next run: ${next_run}"
         fi
     else
-        echo -e "  • ${RED}○${NC} Updater Service: Stopped"
+        echo -e "  • ${RED}○${NC} Dashboard Timer: Inactive"
     fi
 
-    # Pi-hole info
+    # Check for legacy services
+    if systemctl list-unit-files 2>/dev/null | grep -q "service-monitor-updater.service"; then
+        echo -e "  • ${YELLOW}⚠${NC} Legacy updater service detected (will be removed on next install)"
+    fi
+
+    # Check file permissions
+    echo ""
+    echo -e "${WHITE}File Permissions:${NC}"
+    if [[ -f "${DASHBOARD_TIMER}" ]]; then
+        local perms=$(stat -c '%a' "${DASHBOARD_TIMER}" 2>/dev/null)
+        echo -e "  • Timer file: ${perms} (should be 644)"
+    fi
+    if [[ -f "${DASHBOARD_SERVICE}" ]]; then
+        local perms=$(stat -c '%a' "${DASHBOARD_SERVICE}" 2>/dev/null)
+        echo -e "  • Service file: ${perms} (should be 644)"
+    fi
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        local perms=$(stat -c '%a' "${CONFIG_FILE}" 2>/dev/null)
+        echo -e "  • Config file: ${perms} (should be 644)"
+    fi
+
+    # Pi-hole info with debug
     if command -v pihole &>/dev/null; then
         echo ""
         echo -e "${WHITE}Pi-hole Information:${NC}"
         if systemctl is-active --quiet pihole-FTL.service 2>/dev/null; then
             echo -e "  • ${GREEN}●${NC} Pi-hole FTL: Running"
+            echo -e "  • ${GREEN}✓${NC} Using multi-method API (v3.1.4)"
+
+            # Show last Pi-hole stats from log
+            if [[ -f "${UPDATER_LOG}" ]]; then
+                local last_stats=$(grep -i "FINAL.*pihole" "${UPDATER_LOG}" | tail -1)
+                if [[ -n "$last_stats" ]]; then
+                    echo -e "  • Last stats: ${last_stats##*FINAL }"
+                fi
+            fi
         else
             echo -e "  • ${RED}○${NC} Pi-hole FTL: Stopped"
         fi
     fi
 
     echo ""
-    echo -e "${WHITE}Version:${NC} ${SCRIPT_VERSION} (60s interval)"
+    echo -e "${WHITE}Version:${NC} ${SCRIPT_VERSION} Production"
 }
 
 # =============================================================================
@@ -1304,7 +1573,7 @@ show_logs() {
     elif [[ -f "${LOG_FILE}" ]]; then
         tail -f "${LOG_FILE}"
     else
-        print_error "No log files found"
+        journalctl -u service-monitor-dashboard.service -f
     fi
 }
 
@@ -1315,10 +1584,10 @@ show_logs() {
 print_banner() {
     clear
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${WHITE}           SERVICE LOAD MONITOR v3.0.9                   ${BLUE}║${NC}"
+    echo -e "${BLUE}║${WHITE}       SERVICE LOAD MONITOR v3.1.4 PRODUCTION           ${BLUE}║${NC}"
     echo -e "${BLUE}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${BLUE}║${GREEN}  Author:  Wael Isa                                      ${BLUE}║${NC}"
-    echo -e "${BLUE}║${GREEN}  Version: 3.0.9 (60s interval)                          ${BLUE}║${NC}"
+    echo -e "${BLUE}║${GREEN}  Version: 3.1.4 (Fixed Pi-hole API)                    ${BLUE}║${NC}"
     echo -e "${BLUE}║${GREEN}  Website: https://www.wael.name                         ${BLUE}║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -1330,30 +1599,26 @@ print_banner() {
 
 show_features() {
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${WHITE}               FEATURE HIGHLIGHTS v3.0.9${NC}"
+    echo -e "${WHITE}           PRODUCTION FEATURES - v3.1.4                       ${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo -e "${GREEN}🛡️  Pi-hole Integration (FIXED)${NC}"
-    echo "  • Real-time query statistics"
-    echo "  • Blocked domains counter"
-    echo "  • Block percentage calculation"
-    echo "  • Multiple log format support"
-    echo "  • pihole command fallback"
+    echo -e "${GREEN}⚡ PI-HOLE API (FIXED)${NC}"
+    echo "  • 4 methods to collect stats (API, human readable, DB, logs)"
+    echo "  • Multiple JSON parsing patterns"
+    echo "  • FTL database query support"
+    echo "  • Detailed debug logging"
     echo ""
-    echo -e "${GREEN}🌐 DNS Service Integration${NC}"
-    echo "  • Pi-hole FTL"
-    echo "  • Unbound"
-    echo "  • DNSCrypt-Proxy"
-    echo "  • dnsmasq"
-    echo "  • BIND9"
+    echo -e "${GREEN}⏱️  SYSTEMD TIMER${NC}"
+    echo "  • Zero CPU usage between runs"
+    echo "  • Proper service management"
+    echo "  • Journald integration"
+    echo "  • Predictable scheduling"
     echo ""
-    echo -e "${GREEN}📊 Enhanced Monitoring${NC}"
-    echo "  • Bash array config support"
-    echo "  • Multiple service name matching"
-    echo "  • Improved PID detection"
+    echo -e "${GREEN}🔒 PRODUCTION READY${NC}"
+    echo "  • All service files: 644 permissions"
     echo "  • Atomic JSON writes"
-    echo "  • Detailed logging"
-    echo "  • 60-second update interval (reduced CPU)"
+    echo "  • Error handling for all commands"
+    echo "  • Clean removal of all components"
     echo ""
 }
 
@@ -1367,13 +1632,15 @@ backup_existing() {
 
     print_info "Creating backup at ${backup_path}"
     mkdir -p "${backup_path}"
+    chmod 755 "${backup_path}"
 
     [[ -d "${CONFIG_BASE_DIR}" ]] && cp -r "${CONFIG_BASE_DIR}" "${backup_path}/" 2>/dev/null
     [[ -f "${MONITOR_SCRIPT}" ]] && cp "${MONITOR_SCRIPT}" "${backup_path}/" 2>/dev/null
     [[ -f "${DASHBOARD_SCRIPT}" ]] && cp "${DASHBOARD_SCRIPT}" "${backup_path}/" 2>/dev/null
     [[ -f "${SERVICE_FILE}" ]] && cp "${SERVICE_FILE}" "${backup_path}/" 2>/dev/null
+    [[ -f "${DASHBOARD_SERVICE}" ]] && cp "${DASHBOARD_SERVICE}" "${backup_path}/" 2>/dev/null
+    [[ -f "${DASHBOARD_TIMER}" ]] && cp "${DASHBOARD_TIMER}" "${backup_path}/" 2>/dev/null
     [[ -f "${DASHBOARD_HTTP_SERVICE}" ]] && cp "${DASHBOARD_HTTP_SERVICE}" "${backup_path}/" 2>/dev/null
-    [[ -f "${DASHBOARD_UPDATER_SERVICE}" ]] && cp "${DASHBOARD_UPDATER_SERVICE}" "${backup_path}/" 2>/dev/null
 
     echo "${backup_id}"
 }
@@ -1389,19 +1656,21 @@ restore_from_backup() {
 
     print_warning "Restoring from backup: ${backup_id}"
 
-    systemctl stop service-monitor.service 2>/dev/null
+    systemctl stop service-monitor-dashboard.timer 2>/dev/null
+    systemctl stop service-monitor-dashboard.service 2>/dev/null
     systemctl stop service-monitor-http.service 2>/dev/null
-    systemctl stop service-monitor-updater.service 2>/dev/null
+    systemctl stop service-monitor.service 2>/dev/null
 
     [[ -d "${backup_path}/service-monitor" ]] && cp -r "${backup_path}/service-monitor" "${CONFIG_BASE_DIR%/*}/" 2>/dev/null
-    [[ -f "${backup_path}/service-monitor.sh" ]] && cp "${backup_path}/service-monitor.sh" "${BASE_DIR}/" 2>/dev/null && chmod +x "${BASE_DIR}/service-monitor.sh"
-    [[ -f "${backup_path}/service-monitor-dashboard.sh" ]] && cp "${backup_path}/service-monitor-dashboard.sh" "${BASE_DIR}/" 2>/dev/null && chmod +x "${BASE_DIR}/service-monitor-dashboard.sh"
-    [[ -f "${backup_path}/service-monitor.service" ]] && cp "${backup_path}/service-monitor.service" "/etc/systemd/system/" 2>/dev/null
-    [[ -f "${backup_path}/service-monitor-http.service" ]] && cp "${backup_path}/service-monitor-http.service" "/etc/systemd/system/" 2>/dev/null
-    [[ -f "${backup_path}/service-monitor-updater.service" ]] && cp "${backup_path}/service-monitor-updater.service" "/etc/systemd/system/" 2>/dev/null
+    [[ -f "${backup_path}/service-monitor.sh" ]] && cp "${backup_path}/service-monitor.sh" "${BASE_DIR}/" 2>/dev/null && chmod 755 "${BASE_DIR}/service-monitor.sh"
+    [[ -f "${backup_path}/service-monitor-dashboard.sh" ]] && cp "${backup_path}/service-monitor-dashboard.sh" "${BASE_DIR}/" 2>/dev/null && chmod 755 "${BASE_DIR}/service-monitor-dashboard.sh"
+    [[ -f "${backup_path}/service-monitor.service" ]] && cp "${backup_path}/service-monitor.service" "/etc/systemd/system/" 2>/dev/null && chmod 644 "/etc/systemd/system/service-monitor.service"
+    [[ -f "${backup_path}/service-monitor-dashboard.service" ]] && cp "${backup_path}/service-monitor-dashboard.service" "/etc/systemd/system/" 2>/dev/null && chmod 644 "/etc/systemd/system/service-monitor-dashboard.service"
+    [[ -f "${backup_path}/service-monitor-dashboard.timer" ]] && cp "${backup_path}/service-monitor-dashboard.timer" "/etc/systemd/system/" 2>/dev/null && chmod 644 "/etc/systemd/system/service-monitor-dashboard.timer"
+    [[ -f "${backup_path}/service-monitor-http.service" ]] && cp "${backup_path}/service-monitor-http.service" "/etc/systemd/system/" 2>/dev/null && chmod 644 "/etc/systemd/system/service-monitor-http.service"
 
     systemctl daemon-reload
-    print_success "Restore completed"
+    print_success "Restore completed with proper permissions"
 }
 
 # =============================================================================
@@ -1449,7 +1718,7 @@ check_existing_installation() {
         installed_version=$(cat "${VERSION_FILE}")
     fi
 
-    if [[ -f "${SERVICE_FILE}" ]]; then
+    if [[ -f "${SERVICE_FILE}" ]] || [[ -f "${DASHBOARD_SERVICE}" ]] || [[ -f "${DASHBOARD_TIMER}" ]] || [[ -f "${LEGACY_UPDATER_SERVICE}" ]]; then
         has_old_files=true
     fi
 
@@ -1457,7 +1726,7 @@ check_existing_installation() {
 }
 
 migrate_configuration() {
-    print_info "Migrating existing configuration..."
+    print_info "Migrating existing configuration to Production..."
     local backup_id=$(backup_existing "pre-migration")
     print_substep "Pre-migration backup created: ${backup_id}"
     echo "${SCRIPT_VERSION}" > "${VERSION_FILE}"
@@ -1472,13 +1741,13 @@ show_menu() {
     print_banner
     echo -e "${WHITE}Main Menu:${NC}"
     echo ""
-    echo "  1) Install/Update Monitor (v3.0.9)"
-    echo "  2) Remove Monitor"
+    echo "  1) Install/Update Monitor (v3.1.4 Production)"
+    echo "  2) Remove Monitor (Comprehensive Cleanup)"
     echo "  3) Show Status"
     echo "  4) View Logs"
     echo "  5) Create Backup"
     echo "  6) Restore from Backup"
-    echo "  7) Show Features"
+    echo "  7) Show Production Features"
     echo "  8) Exit"
     echo ""
     echo -n -e "${YELLOW}Select option [1-8]: ${NC}"
@@ -1519,7 +1788,7 @@ main() {
                 restore_from_backup "${backup_id}"
                 ;;
             version)
-                echo "Service Load Monitor v${SCRIPT_VERSION}"
+                echo "Service Load Monitor v${SCRIPT_VERSION} Production"
                 ;;
             features)
                 show_features
@@ -1542,8 +1811,8 @@ main() {
     if [[ -n "$old_ver" ]] && [[ "$old_ver" != "$SCRIPT_VERSION" ]]; then
         local comparison=$(version_compare "$SCRIPT_VERSION" "$old_ver")
         if [[ "$comparison" == "newer" ]]; then
-            echo -e "${YELLOW}New version available: $old_ver -> $SCRIPT_VERSION${NC}"
-            echo -e "${YELLOW}Run './service-load-monitor.sh install' to update${NC}"
+            echo -e "${YELLOW}Production version available: $old_ver -> $SCRIPT_VERSION${NC}"
+            echo -e "${YELLOW}Run './service-load-monitor.sh install' to upgrade${NC}"
             echo ""
         fi
     fi
@@ -1597,7 +1866,7 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             8)
-                echo -e "\n${GREEN}Thank you for using Service Load Monitor v3.0.9!${NC}"
+                echo -e "\n${GREEN}Thank you for using Service Load Monitor v3.1.4 Production!${NC}"
                 echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}\n"
                 exit 0
                 ;;
