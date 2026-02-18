@@ -177,144 +177,6 @@ detect_dns_services() {
     echo "${detected[@]}"
 }
 
-get_pihole_stats() {
-    local stats=""
-
-    # Check if Pi-hole is installed
-    if command -v pihole &> /dev/null; then
-        # Get Pi-hole status
-        local pihole_status=$(systemctl is-active pihole-FTL.service 2>/dev/null || echo "inactive")
-        local domains_blocked=0
-        local queries_today=0
-        local blocked_today=0
-
-        # Try to get stats from pihole command
-        if [[ -f "${PIHOLE_LOG}" ]]; then
-            queries_today=$(grep -c "query" "${PIHOLE_LOG}" 2>/dev/null || echo "0")
-            blocked_today=$(grep -c "gravity blocked" "${PIHOLE_LOG}" 2>/dev/null || echo "0")
-        fi
-
-        # Try to get domains blocked count
-        if [[ -f "${PIHOLE_GRAVITY}" ]]; then
-            domains_blocked=$(sqlite3 "${PIHOLE_GRAVITY}" "SELECT COUNT(*) FROM gravity;" 2>/dev/null || echo "0")
-        fi
-
-        stats="{
-            \"status\": \"${pihole_status}\",
-            \"domains_blocked\": ${domains_blocked:-0},
-            \"queries_today\": ${queries_today:-0},
-            \"blocked_today\": ${blocked_today:-0}
-        }"
-    else
-        stats="null"
-    fi
-
-    echo "${stats}"
-}
-
-get_service_cpu_mem() {
-    local service="$1"
-    local pid=""
-    local cpu=0
-    local mem=0
-
-    # Try to get PID using pgrep
-    case "${service}" in
-        "pihole-FTL.service")
-            pid=$(pgrep -f "pihole-FTL" | head -1)
-            ;;
-        "cloudflared.service")
-            pid=$(pgrep -f "cloudflared" | head -1)
-            ;;
-        "unbound.service")
-            pid=$(pgrep -f "unbound" | head -1)
-            ;;
-        "dnscrypt-proxy.service")
-            pid=$(pgrep -f "dnscrypt-proxy" | head -1)
-            ;;
-        "dnsmasq.service")
-            pid=$(pgrep -f "dnsmasq" | head -1)
-            ;;
-        "named.service")
-            pid=$(pgrep -f "named" | head -1)
-            ;;
-        *)
-            # Try to get PID from systemd
-            pid=$(systemctl show -p MainPID "${service}" 2>/dev/null | cut -d= -f2)
-            ;;
-    esac
-
-    # If we have a PID and it's not 0, get CPU and memory usage
-    if [[ -n "${pid}" ]] && [[ "${pid}" != "0" ]] && [[ -f "/proc/${pid}/stat" ]]; then
-        # Get CPU usage (simplified - just using top for now)
-        cpu=$(top -bn1 -p "${pid}" 2>/dev/null | tail -1 | awk '{print $9}' | cut -d',' -f1 || echo "0")
-        mem=$(top -bn1 -p "${pid}" 2>/dev/null | tail -1 | awk '{print $10}' | cut -d',' -f1 || echo "0")
-
-        # If top didn't work, try ps
-        if [[ "${cpu}" == "0" ]] && [[ "${mem}" == "0" ]]; then
-            cpu=$(ps -p "${pid}" -o %cpu --no-headers 2>/dev/null | tr -d ' ' || echo "0")
-            mem=$(ps -p "${pid}" -o %mem --no-headers 2>/dev/null | tr -d ' ' || echo "0")
-        fi
-    fi
-
-    echo "${cpu:-0}|${mem:-0}"
-}
-
-get_dns_service_details() {
-    local service="$1"
-    local details="{}"
-
-    case "${service}" in
-        "pihole-FTL.service")
-            if command -v pihole &> /dev/null; then
-                local queries=0
-                local blocked=0
-
-                if [[ -f "${PIHOLE_LOG}" ]]; then
-                    queries=$(grep -c "query" "${PIHOLE_LOG}" 2>/dev/null || echo "0")
-                    blocked=$(grep -c "gravity blocked" "${PIHOLE_LOG}" 2>/dev/null || echo "0")
-                fi
-
-                details="{
-                    \"queries_today\": ${queries},
-                    \"blocked_today\": ${blocked}
-                }"
-            fi
-            ;;
-        "cloudflared.service")
-            if command -v cloudflared &> /dev/null; then
-                local version=$(cloudflared --version 2>/dev/null | head -1 | awk '{print $3}' || echo "unknown")
-                local tunnels=$(cloudflared tunnel list 2>/dev/null | wc -l || echo "0")
-                tunnels=$((tunnels - 2)) # Adjust for header lines
-                [[ ${tunnels} -lt 0 ]] && tunnels=0
-
-                details="{
-                    \"version\": \"${version}\",
-                    \"tunnels\": ${tunnels}
-                }"
-            fi
-            ;;
-        "unbound.service")
-            if command -v unbound &> /dev/null; then
-                local version=$(unbound -V 2>/dev/null | head -1 | awk '{print $2}' || echo "unknown")
-                details="{
-                    \"version\": \"${version}\"
-                }"
-            fi
-            ;;
-        "dnscrypt-proxy.service")
-            if command -v dnscrypt-proxy &> /dev/null; then
-                local version=$(dnscrypt-proxy --version 2>/dev/null || echo "unknown")
-                details="{
-                    \"version\": \"${version}\"
-                }"
-            fi
-            ;;
-    esac
-
-    echo "${details}"
-}
-
 # =============================================================================
 # ENVIRONMENT CHECK FUNCTIONS
 # =============================================================================
@@ -1030,7 +892,7 @@ migrate_configuration() {
 }
 
 # =============================================================================
-# DASHBOARD FUNCTIONS - FIXED TO SHOW ALL ACTIVE SERVICES
+# DASHBOARD FUNCTIONS - COMPLETELY FIXED FOR JSON PARSING
 # =============================================================================
 
 create_dashboard_files() {
@@ -1048,13 +910,13 @@ create_dashboard_files() {
     "servers": [
         {
             "id": "local",
-            "hostname": "$(hostname)",
-            "uptime": "$(uptime | sed 's/.*up \([^,]*\),.*/\1/')",
-            "load": "$(uptime | awk -F'load average:' '{print $2}' | xargs)",
+            "hostname": "$(hostname 2>/dev/null | sed 's/["\\]/\\\\&/g' || echo "localhost")",
+            "uptime": "$(uptime 2>/dev/null | sed 's/.*up \([^,]*\),.*/\1/' | sed 's/["\\]/\\\\&/g' || echo "unknown")",
+            "load": "$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | xargs | sed 's/["\\]/\\\\&/g' || echo "0.00")",
             "cpu_cores": $(nproc 2>/dev/null || echo "1"),
-            "memory": "$(free -h | grep Mem | awk '{print $3"/"$2}' 2>/dev/null || echo "0/0")",
+            "memory": "$(free -h 2>/dev/null | grep Mem | awk '{print $3"/"$2}' | sed 's/["\\]/\\\\&/g' || echo "0/0")",
             "iowait": "0%",
-            "disk_usage": "$(df -h / | awk 'NR==2 {print $5}' 2>/dev/null || echo "0%")",
+            "disk_usage": "$(df -h / 2>/dev/null | awk 'NR==2 {print $5}' | sed 's/["\\]/\\\\&/g' || echo "0%")",
             "services": [],
             "dns_services": []
         }
@@ -1064,7 +926,7 @@ create_dashboard_files() {
 }
 EOF
 
-    # Create index.html with fixed JavaScript to properly display services
+    # Create index.html with fixed JavaScript
     cat > "${DASHBOARD_DIR}/index.html" << 'HTML'
 <!DOCTYPE html>
 <html lang="en">
@@ -1241,6 +1103,14 @@ EOF
             background: #f8f9fa;
             border-radius: 10px;
         }
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            margin: 20px 0;
+        }
     </style>
 </head>
 <body>
@@ -1287,12 +1157,23 @@ EOF
             fetch('status.json?' + new Date().getTime())
                 .then(response => {
                     if (!response.ok) {
-                        throw new Error('Network response was not ok');
+                        throw new Error('HTTP error ' + response.status);
                     }
-                    return response.json();
+                    return response.text();
+                })
+                .then(text => {
+                    // Clean the text of any control characters
+                    text = text.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
+                    try {
+                        return JSON.parse(text);
+                    } catch (e) {
+                        console.error('JSON parse error:', e);
+                        console.error('Raw text:', text.substring(0, 200) + '...');
+                        throw new Error('Invalid JSON: ' + e.message);
+                    }
                 })
                 .then(data => {
-                    console.log('Data received:', data); // Debug log
+                    console.log('Data received:', data);
 
                     document.getElementById('lastUpdate').textContent = 'Last updated: ' + (data.last_update || 'Unknown');
 
@@ -1427,8 +1308,8 @@ EOF
                     document.getElementById('lastUpdate').textContent = 'Error loading data: ' + error.message;
 
                     // Show error in service lists
-                    document.getElementById('dnsGrid').innerHTML = '<div class="no-services">Error loading DNS services. Check if the updater is running.</div>';
-                    document.getElementById('serviceList').innerHTML = '<div class="no-services">Error loading services. Check if the updater is running.</div>';
+                    document.getElementById('dnsGrid').innerHTML = '<div class="error-message">Error loading DNS services. Check if the updater is running.<br><small>' + error.message + '</small></div>';
+                    document.getElementById('serviceList').innerHTML = '<div class="error-message">Error loading services. Check if the updater is running.<br><small>' + error.message + '</small></div>';
                 });
         }
 
@@ -1441,7 +1322,7 @@ EOF
 HTML
 
     chmod -R 755 "${DASHBOARD_DIR}"
-    print_substep "Dashboard files created with fixed service display"
+    print_substep "Dashboard files created"
 }
 
 create_dashboard_scripts() {
@@ -1451,7 +1332,7 @@ create_dashboard_scripts() {
 #!/bin/bash
 
 # =============================================================================
-# Service Monitor Dashboard Updater v3.0.1
+# Service Monitor Dashboard Updater v3.0.1 - FIXED JSON ESCAPING
 # =============================================================================
 # Author: Wael Isa
 # Website: https://www.wael.name
@@ -1460,10 +1341,27 @@ create_dashboard_scripts() {
 DASHBOARD_DIR="/var/www/html/service-monitor"
 LOG_FILE="/var/log/service-monitor.log"
 CONFIG_FILE="/etc/service-monitor/config.conf"
+DEBUG_LOG="/var/log/service-monitor-updater-debug.log"
 
 # Function to log messages
 log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
+}
+
+# Function to escape JSON strings properly
+json_escape() {
+    local str="$1"
+    # Escape backslashes first
+    str="${str//\\/\\\\}"
+    # Escape double quotes
+    str="${str//\"/\\\"}"
+    # Escape control characters
+    str="${str//$'\n'/\\n}"
+    str="${str//$'\r'/\\r}"
+    str="${str//$'\t'/\\t}"
+    # Remove any other control characters
+    str=$(echo -n "$str" | tr -d '\000-\011\013-\037\177')
+    echo -n "$str"
 }
 
 # Function to get service CPU and memory usage
@@ -1531,7 +1429,7 @@ get_pihole_stats() {
         fi
 
         stats="{
-            \"status\": \"${status}\",
+            \"status\": \"$(json_escape "${status}")\",
             \"queries_today\": ${queries_today},
             \"blocked_today\": ${blocked_today}
         }"
@@ -1555,7 +1453,7 @@ get_cloudflared_stats() {
         fi
 
         stats="{
-            \"version\": \"${version}\",
+            \"version\": \"$(json_escape "${version}")\",
             \"tunnels\": ${tunnels}
         }"
     fi
@@ -1571,7 +1469,7 @@ get_unbound_stats() {
         local version=$(unbound -V 2>/dev/null | head -1 | awk '{print $2}' || echo "unknown")
 
         stats="{
-            \"version\": \"${version}\"
+            \"version\": \"$(json_escape "${version}")\"
         }"
     fi
 
@@ -1586,7 +1484,7 @@ get_dnscrypt_stats() {
         local version=$(dnscrypt-proxy --version 2>/dev/null || echo "unknown")
 
         stats="{
-            \"version\": \"${version}\"
+            \"version\": \"$(json_escape "${version}")\"
         }"
     fi
 
@@ -1596,14 +1494,14 @@ get_dnscrypt_stats() {
 log_message "Dashboard updater v3.0.1 started"
 
 while true; do
-    # Get system info with error handling
-    HOSTNAME=$(hostname 2>/dev/null || echo "localhost")
-    UPTIME=$(uptime | sed 's/.*up \([^,]*\),.*/\1/' 2>/dev/null || echo "unknown")
-    LOAD=$(uptime | awk -F'load average:' '{print $2}' | xargs 2>/dev/null || echo "0.00")
+    # Get system info with error handling and JSON escaping
+    HOSTNAME=$(hostname 2>/dev/null | json_escape || echo "localhost")
+    UPTIME=$(uptime 2>/dev/null | sed 's/.*up \([^,]*\),.*/\1/' | json_escape || echo "unknown")
+    LOAD=$(uptime 2>/dev/null | awk -F'load average:' '{print $2}' | xargs | json_escape || echo "0.00")
     CPU_CORES=$(nproc 2>/dev/null || echo "1")
-    MEMORY=$(free -h | grep Mem | awk '{print $3"/"$2}' 2>/dev/null || echo "0/0")
-    DISK=$(df -h / | awk 'NR==2 {print $5}' 2>/dev/null || echo "0%")
-    IOWAIT=$(top -bn1 | grep "Cpu(s)" | awk '{print $8}' | cut -d',' -f1 2>/dev/null || echo "0")
+    MEMORY=$(free -h 2>/dev/null | grep Mem | awk '{print $3"/"$2}' | json_escape || echo "0/0")
+    DISK=$(df -h / 2>/dev/null | awk 'NR==2 {print $5}' | json_escape || echo "0%")
+    IOWAIT=$(top -bn1 2>/dev/null | grep "Cpu(s)" | awk '{print $8}' | cut -d',' -f1 || echo "0")
     IOWAIT=${IOWAIT:-0}
 
     # Get Pi-hole stats
@@ -1632,6 +1530,7 @@ while true; do
             fi
 
             STATUS=$(systemctl is-active "${SERVICE}" 2>/dev/null || echo "inactive")
+            STATUS=$(json_escape "${STATUS}")
 
             # Get CPU and memory stats
             STATS=$(get_service_stats "${SERVICE}")
@@ -1655,7 +1554,8 @@ while true; do
                     ;;
             esac
 
-            DNS_JSON+="{\"name\":\"${SERVICE}\",\"status\":\"${STATUS}\",\"cpu\":${CPU},\"mem\":${MEM},\"details\":${DETAILS}}"
+            SERVICE_NAME=$(json_escape "${SERVICE}")
+            DNS_JSON+="{\"name\":\"${SERVICE_NAME}\",\"status\":\"${STATUS}\",\"cpu\":${CPU},\"mem\":${MEM},\"details\":${DETAILS}}"
             log_message "DNS Service ${SERVICE}: ${STATUS} (CPU: ${CPU}%, MEM: ${MEM}%)"
         fi
     done
@@ -1681,13 +1581,15 @@ while true; do
                     fi
 
                     STATUS=$(systemctl is-active "${SERVICE}" 2>/dev/null || echo "unknown")
+                    STATUS=$(json_escape "${STATUS}")
 
                     # Get CPU and memory stats for regular services
                     STATS=$(get_service_stats "${SERVICE}")
                     CPU=$(echo "${STATS}" | cut -d'|' -f1)
                     MEM=$(echo "${STATS}" | cut -d'|' -f2)
 
-                    SERVICES_JSON+="{\"name\":\"${SERVICE}\",\"status\":\"${STATUS}\",\"cpu\":${CPU},\"mem\":${MEM}}"
+                    SERVICE_NAME=$(json_escape "${SERVICE}")
+                    SERVICES_JSON+="{\"name\":\"${SERVICE_NAME}\",\"status\":\"${STATUS}\",\"cpu\":${CPU},\"mem\":${MEM}}"
                     log_message "Monitored Service ${SERVICE}: ${STATUS} (CPU: ${CPU}%, MEM: ${MEM}%)"
                 done
                 break
@@ -1695,7 +1597,7 @@ while true; do
         done < "${CONFIG_FILE}"
     fi
 
-    # Create JSON with proper formatting
+    # Create JSON with proper formatting - ensure all strings are escaped
     cat > "${DASHBOARD_DIR}/status.json" << JSON
 {
     "last_update": "$(date '+%Y-%m-%d %H:%M:%S')",
@@ -1721,13 +1623,46 @@ while true; do
 }
 JSON
 
-    log_message "Dashboard updated successfully"
+    # Verify JSON is valid
+    if ! python3 -m json.tool "${DASHBOARD_DIR}/status.json" > /dev/null 2>&1; then
+        log_message "ERROR: Generated invalid JSON, creating emergency backup"
+        cp "${DASHBOARD_DIR}/status.json" "${DASHBOARD_DIR}/status.json.error"
+        # Create minimal valid JSON as fallback
+        cat > "${DASHBOARD_DIR}/status.json" << JSONFALLBACK
+{
+    "last_update": "$(date '+%Y-%m-%d %H:%M:%S')",
+    "version": "3.0.1",
+    "author": "Wael Isa",
+    "website": "https://www.wael.name",
+    "servers": [
+        {
+            "id": "local",
+            "hostname": "${HOSTNAME}",
+            "uptime": "${UPTIME}",
+            "load": "${LOAD}",
+            "cpu_cores": ${CPU_CORES},
+            "memory": "${MEMORY}",
+            "iowait": "${IOWAIT}%",
+            "disk_usage": "${DISK}",
+            "services": [],
+            "dns_services": []
+        }
+    ],
+    "pihole": null,
+    "alerts": []
+}
+JSONFALLBACK
+        log_message "Created fallback JSON"
+    else
+        log_message "Dashboard updated successfully with valid JSON"
+    fi
+
     sleep 30
 done
 EOF
 
     chmod +x "${DASHBOARD_SCRIPT}"
-    print_substep "Dashboard scripts created with fixed service monitoring"
+    print_substep "Dashboard scripts created with fixed JSON escaping"
 }
 
 create_dashboard_services() {
@@ -2293,23 +2228,23 @@ EOF
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
-    # Summary
+    # Summary - FIXED WITH -e FLAGS
     echo -e "${WHITE}Installation Summary:${NC}"
     echo "  • Version: ${SCRIPT_VERSION}"
-    echo "  • Monitor Service: ${GREEN}service-monitor.service${NC}"
-    echo "  • HTTP Server: ${GREEN}service-monitor-http.service${NC} (port ${DEFAULT_DASHBOARD_PORT})"
-    echo "  • Updater Service: ${GREEN}service-monitor-updater.service${NC}"
+    echo -e "  • Monitor Service: ${GREEN}service-monitor.service${NC}"
+    echo -e "  • HTTP Server: ${GREEN}service-monitor-http.service${NC} (port ${DEFAULT_DASHBOARD_PORT})"
+    echo -e "  • Updater Service: ${GREEN}service-monitor-updater.service${NC}"
     echo "  • Config: ${CONFIG_FILE}"
     echo "  • Logs: ${LOG_FILE}"
     echo "  • Dashboard: ${DASHBOARD_DIR}"
     echo "  • DNS Services Monitored: ${#dns_services[@]}"
     echo ""
     echo -e "${WHITE}Commands:${NC}"
-    echo "  • Check status: ${GREEN}systemctl status service-monitor.service${NC}"
-    echo "  • View logs: ${GREEN}tail -f ${LOG_FILE}${NC}"
-    echo "  • Edit config: ${GREEN}nano ${CONFIG_FILE}${NC}"
-    echo "  • Restart dashboard: ${GREEN}systemctl restart service-monitor-updater.service${NC}"
-    echo "  • Check DNS services: ${GREEN}systemctl status pihole-FTL.service cloudflared.service unbound.service dnscrypt-proxy.service${NC}"
+    echo -e "  • Check status: ${GREEN}systemctl status service-monitor.service${NC}"
+    echo -e "  • View logs: ${GREEN}tail -f ${LOG_FILE}${NC}"
+    echo -e "  • Edit config: ${GREEN}nano ${CONFIG_FILE}${NC}"
+    echo -e "  • Restart dashboard: ${GREEN}systemctl restart service-monitor-updater.service${NC}"
+    echo -e "  • Check DNS services: ${GREEN}systemctl status pihole-FTL.service cloudflared.service unbound.service dnscrypt-proxy.service${NC}"
     echo ""
     echo -e "${GREEN}Thank you for using Service Load Monitor v3.0.1!${NC}"
     echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}"
