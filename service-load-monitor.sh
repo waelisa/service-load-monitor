@@ -27,6 +27,7 @@
 # 12. FIXED: Installation wizard output separated from monitoring data
 # 13. FIXED: Added missing detect_distro function
 # 14. FIXED: Added all required dependency functions
+# 15. RESTORED: Pi-hole statistics in dashboard (queries, blocked, percentage)
 # =============================================================================
 
 # Color codes for better UI - ONLY used in installation wizard, never in JSON
@@ -299,7 +300,7 @@ command_exists() {
 }
 
 # =============================================================================
-# DASHBOARD FUNCTIONS - COMPLETELY SILENT, NO OUTPUT TO JSON
+# DASHBOARD FUNCTIONS - COMPLETELY SILENT, WITH PI-HOLE STATS
 # =============================================================================
 
 create_dashboard_files() {
@@ -329,7 +330,7 @@ create_dashboard_files() {
 }
 EOF
 
-    # Create index.html with fixed JavaScript
+    # Create index.html with fixed JavaScript - INCLUDING PI-HOLE SECTION
     cat > "${DASHBOARD_DIR}/index.html" << 'HTML'
 <!DOCTYPE html>
 <html lang="en">
@@ -337,7 +338,7 @@ EOF
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="refresh" content="30">
-    <title>Service Monitor Dashboard v3.0.4</title>
+    <title>Service Monitor Dashboard v3.0.4 - Wael Isa</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -364,6 +365,8 @@ EOF
             display: inline-block;
             margin-left: 10px;
         }
+        .header .author { color: #666; font-size: 1.1em; }
+        .header .author a { color: #667eea; text-decoration: none; }
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -378,6 +381,28 @@ EOF
         }
         .stat-card h3 { color: #666; font-size: 0.9em; margin-bottom: 10px; }
         .stat-card .value { color: #333; font-size: 1.8em; font-weight: bold; }
+
+        .pihole-section {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            border-left: 4px solid #f0ad4e;
+        }
+        .pihole-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .pihole-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
 
         .dns-section {
             background: white;
@@ -442,6 +467,7 @@ EOF
             margin-top: 20px;
             color: white;
         }
+        .footer a { color: white; text-decoration: none; }
         .last-update { color: #999; font-size: 0.9em; margin-top: 10px; }
         .loading { text-align: center; padding: 40px; color: #666; }
     </style>
@@ -450,6 +476,7 @@ EOF
     <div class="container">
         <div class="header">
             <h1>🔍 Service Load Monitor <span class="badge">v3.0.4</span></h1>
+            <div class="author">by <a href="https://www.wael.name" target="_blank">Wael Isa</a></div>
             <div class="last-update" id="lastUpdate">Loading...</div>
         </div>
 
@@ -458,6 +485,11 @@ EOF
             <div class="stat-card"><h3>Uptime</h3><div class="value">Loading...</div></div>
             <div class="stat-card"><h3>Memory</h3><div class="value">Loading...</div></div>
             <div class="stat-card"><h3>Disk Usage</h3><div class="value">Loading...</div></div>
+        </div>
+
+        <div class="pihole-section" id="piholeSection" style="display: none;">
+            <h2>🛡️ Pi-hole Status</h2>
+            <div class="pihole-stats" id="piholeStats"></div>
         </div>
 
         <div class="dns-section">
@@ -476,7 +508,7 @@ EOF
     </div>
 
     <div class="footer">
-        <p>© 2026 Service Load Monitor v3.0.4</p>
+        <p>© 2026 <a href="https://www.wael.name" target="_blank">Wael Isa</a> - Service Load Monitor v3.0.4</p>
     </div>
 
     <script>
@@ -507,6 +539,39 @@ EOF
                             <div class="stat-card"><h3>Memory</h3><div class="value">${s.memory || '0/0'}</div></div>
                             <div class="stat-card"><h3>Disk Usage</h3><div class="value">${s.disk_usage || '0%'}</div></div>
                         `;
+                    }
+
+                    // Update Pi-hole section
+                    const piholeSection = document.getElementById('piholeSection');
+                    if (data.pihole && data.pihole.status) {
+                        piholeSection.style.display = 'block';
+                        const piholeStats = document.getElementById('piholeStats');
+                        const status = data.pihole.status || 'unknown';
+                        const statusClass = status === 'active' ? 'status-active' : 'status-inactive';
+                        const queriesToday = data.pihole.queries_today || 0;
+                        const blockedToday = data.pihole.blocked_today || 0;
+                        const blockedPercent = queriesToday > 0 ? ((blockedToday / queriesToday * 100).toFixed(1) + '%') : '0%';
+
+                        piholeStats.innerHTML = `
+                            <div class="stat-card">
+                                <h3>Status</h3>
+                                <div class="value"><span class="status-badge ${statusClass}">${status}</span></div>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Queries Today</h3>
+                                <div class="value">${queriesToday}</div>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Blocked Today</h3>
+                                <div class="value">${blockedToday}</div>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Blocked %</h3>
+                                <div class="value">${blockedPercent}</div>
+                            </div>
+                        `;
+                    } else {
+                        piholeSection.style.display = 'none';
                     }
 
                     // Update DNS services
@@ -565,7 +630,7 @@ EOF
 HTML
 
     chmod -R 755 "${DASHBOARD_DIR}"
-    print_substep "Dashboard files created"
+    print_substep "Dashboard files created with Pi-hole stats restored"
 }
 
 create_dashboard_scripts() {
@@ -590,6 +655,30 @@ CONFIG_FILE="/etc/service-monitor/config.conf"
 # Function to escape JSON strings
 json_escape() {
     echo -n "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/'"$(printf '\n')"'/\\n/g'
+}
+
+# Function to get Pi-hole stats
+get_pihole_stats() {
+    local status="inactive"
+    local queries_today=0
+    local blocked_today=0
+
+    if command -v pihole &>/dev/null || [[ -f "/usr/local/bin/pihole" ]] || [[ -f "/usr/bin/pihole" ]]; then
+        if systemctl is-active --quiet pihole-FTL.service 2>/dev/null; then
+            status="active"
+
+            # Try to get query counts from logs
+            if [[ -f "/var/log/pihole.log" ]]; then
+                queries_today=$(grep -c "query" /var/log/pihole.log 2>/dev/null || echo 0)
+                blocked_today=$(grep -c "gravity blocked" /var/log/pihole.log 2>/dev/null || echo 0)
+            elif [[ -f "/var/log/pihole/pihole.log" ]]; then
+                queries_today=$(grep -c "query" /var/log/pihole/pihole.log 2>/dev/null || echo 0)
+                blocked_today=$(grep -c "gravity blocked" /var/log/pihole/pihole.log 2>/dev/null || echo 0)
+            fi
+        fi
+    fi
+
+    echo "{\"status\":\"$status\",\"queries_today\":$queries_today,\"blocked_today\":$blocked_today}"
 }
 
 # Function to get service status - SILENT, no output
@@ -637,12 +726,7 @@ while true; do
     DISK=$(df -h / 2>/dev/null | awk 'NR==2 {print $5}' || echo "0%")
 
     # Get Pi-hole stats
-    PIHOLE_STATUS="inactive"
-    if command -v pihole &>/dev/null; then
-        if systemctl is-active --quiet pihole-FTL.service 2>/dev/null; then
-            PIHOLE_STATUS="active"
-        fi
-    fi
+    PIHOLE_STATS=$(get_pihole_stats)
 
     # Check DNS services - SILENT
     DNS_SERVICES=("pihole-FTL.service" "unbound.service" "dnscrypt-proxy.service" "dnsmasq.service" "named.service")
@@ -708,9 +792,7 @@ while true; do
             "dns_services": [$DNS_JSON]
         }
     ],
-    "pihole": {
-        "status": "$PIHOLE_STATUS"
-    }
+    "pihole": $PIHOLE_STATS
 }
 JSON
 
@@ -719,7 +801,7 @@ done
 EOF
 
     chmod +x "${DASHBOARD_SCRIPT}"
-    print_substep "Dashboard scripts created - SILENT mode"
+    print_substep "Dashboard scripts created - SILENT mode with Pi-hole stats"
 }
 
 create_dashboard_services() {
@@ -918,7 +1000,7 @@ install_monitor() {
     create_dashboard_files
     create_dashboard_scripts
     create_dashboard_services
-    print_success "Dashboard created"
+    print_success "Dashboard created with Pi-hole stats"
     current_step=$((current_step + 1))
 
     # Step 7: Create main service
@@ -980,6 +1062,7 @@ EOF
     echo "  • Logs: ${LOG_FILE}"
     echo "  • Dashboard: ${DASHBOARD_DIR}"
     echo "  • DNS Services: ${#dns_services[@]}"
+    echo "  • Pi-hole Stats: Enabled"
     echo ""
     echo -e "${GREEN}Thank you for using Service Load Monitor v3.0.4!${NC}"
     echo -e "${GREEN}© 2026 Wael Isa - https://www.wael.name${NC}"
@@ -1086,6 +1169,17 @@ show_status() {
         echo -e "  • ${RED}○${NC} Updater Service: Stopped"
     fi
 
+    # Pi-hole info
+    if command -v pihole &>/dev/null || [[ -f "/usr/local/bin/pihole" ]] || [[ -f "/usr/bin/pihole" ]]; then
+        echo ""
+        echo -e "${WHITE}Pi-hole Information:${NC}"
+        if systemctl is-active --quiet pihole-FTL.service 2>/dev/null; then
+            echo -e "  • ${GREEN}●${NC} Pi-hole FTL: Running"
+        else
+            echo -e "  • ${RED}○${NC} Pi-hole FTL: Stopped"
+        fi
+    fi
+
     # Version info
     echo ""
     echo -e "${WHITE}Version Information:${NC}"
@@ -1123,7 +1217,7 @@ print_banner() {
     echo -e "${BLUE}║${WHITE}           SERVICE LOAD MONITOR v3.0.4                   ${BLUE}║${NC}"
     echo -e "${BLUE}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${BLUE}║${GREEN}  Author:  Wael Isa                                      ${BLUE}║${NC}"
-    echo -e "${BLUE}║${GREEN}  Version: 3.0.4 (SILENT Mode - No More Garbage)        ${BLUE}║${NC}"
+    echo -e "${BLUE}║${GREEN}  Version: 3.0.4 (SILENT Mode + Pi-hole Stats)          ${BLUE}║${NC}"
     echo -e "${BLUE}║${GREEN}  Date:    February 18, 2026                             ${BLUE}║${NC}"
     echo -e "${BLUE}║${GREEN}  Website: https://www.wael.name                         ${BLUE}║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
@@ -1139,8 +1233,13 @@ show_features() {
     echo -e "${WHITE}               FEATURE HIGHLIGHTS v3.0.4${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo -e "${GREEN}🛡️  DNS Service Integration${NC}"
-    echo "  • Pi-hole FTL"
+    echo -e "${GREEN}🛡️  Pi-hole Integration${NC}"
+    echo "  • Real-time query statistics"
+    echo "  • Blocked domains counter"
+    echo "  • Block percentage calculation"
+    echo "  • FTL service status"
+    echo ""
+    echo -e "${GREEN}🌐 DNS Service Integration${NC}"
     echo "  • Unbound"
     echo "  • DNSCrypt-Proxy"
     echo "  • dnsmasq"
